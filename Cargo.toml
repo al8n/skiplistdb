@@ -1,13 +1,12 @@
 [package]
-name = "template-rs"
-version = "0.1.6"
+name = "skiplistdb"
+version = "0.0.0"
 edition = "2021"
-repository = "https://github.com/al8n/template-rs"
-homepage = "https://github.com/al8n/template-rs"
-documentation = "https://docs.rs/template-rs"
+repository = "https://github.com/al8n/skiplistdb"
+homepage = "https://github.com/al8n/skiplistdb"
+documentation = "https://docs.rs/skiplistdb"
 description = "A template for creating Rust open-source repo on GitHub"
 license = "MIT/Apache-2.0"
-rust-version = "1.73"
 
 [[bench]]
 path = "benches/foo.rs"
@@ -18,6 +17,9 @@ harness = false
 default = []
 
 [dependencies]
+crossbeam-skiplist = "0.1"
+either = "1"
+mwmr = { path = "../txn/mwmr" }
 
 [dev-dependencies]
 criterion = "0.5"
