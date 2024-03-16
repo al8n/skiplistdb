@@ -1,0 +1,260 @@
+use super::*;
+
+mod read;
+pub use read::*;
+
+mod write;
+pub use write::*;
+
+struct Inner<K, V, S = std::hash::DefaultHasher> {
+  tm: Tm<K, V, HashCm<K, S>, PendingMap<K, V>>,
+  map: SkipMap<K, SkipMap<u64, Option<Arc<V>>>>,
+  hasher: S,
+  max_batch_size: u64,
+  max_batch_entries: u64,
+  len: AtomicUsize,
+  len_including_versions: AtomicUsize,
+}
+
+impl<K, V, S> Inner<K, V, S> {
+  fn new(name: &str, max_batch_size: u64, max_batch_entries: u64, hasher: S) -> Self {
+    let map = SkipMap::new();
+    let tm = Tm::new(name, 0);
+    Self {
+      tm,
+      map,
+      hasher,
+      max_batch_size,
+      max_batch_entries,
+      len: AtomicUsize::new(0),
+      len_including_versions: AtomicUsize::new(0),
+    }
+  }
+}
+
+/// A concurrent ACID, MVCC in-memory database based on [`crossbeam-skiplist`][crossbeam_skiplist].
+pub struct EquivalentDB<K, V, S = std::hash::DefaultHasher> {
+  inner: Arc<Inner<K, V, S>>,
+}
+
+impl<K, V, S> Clone for EquivalentDB<K, V, S> {
+  #[inline]
+  fn clone(&self) -> Self {
+    Self {
+      inner: self.inner.clone(),
+    }
+  }
+}
+
+impl<K, V> Default for EquivalentDB<K, V> {
+  /// Creates a new `EquivalentDB` with the default options.
+  #[inline]
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl<K, V> EquivalentDB<K, V> {
+  /// Creates a new `EquivalentDB` with the given options.
+  #[inline]
+  pub fn new() -> Self {
+    Self::with_options_and_hasher(Default::default(), Default::default())
+  }
+}
+
+impl<K, V, S> EquivalentDB<K, V, S> {
+  /// Creates a new `EquivalentDB` with the given hasher.
+  #[inline]
+  pub fn with_hasher(hasher: S) -> Self {
+    Self::with_options_and_hasher(Default::default(), hasher)
+  }
+
+  /// Creates a new `EquivalentDB` with the given options and hasher.
+  #[inline]
+  pub fn with_options_and_hasher(opts: Options, hasher: S) -> Self {
+    let inner = Arc::new(Inner::new(
+      "skiplistdb",
+      opts.max_batch_size,
+      opts.max_batch_entries,
+      hasher,
+    ));
+    Self { inner }
+  }
+
+  /// Create a read transaction.
+  #[inline]
+  pub fn read(&self) -> ReadTransaction<K, V, S> {
+    ReadTransaction::new(self.clone())
+  }
+
+  /// Create a write transaction.
+  #[inline]
+  pub fn write(&self) -> WriteTransaction<K, V, S> {
+    WriteTransaction::new(self.clone())
+  }
+}
+
+impl<K, V, S> EquivalentDB<K, V, S>
+where
+  K: Ord,
+{
+  fn get<Q>(&self, key: &Q, version: u64) -> Option<Arc<V>>
+  where
+    K: Borrow<Q>,
+    Q: Ord + ?Sized,
+  {
+    let ent = self.inner.map.get(key)?;
+    ent
+      .value()
+      .upper_bound(Bound::Included(&version))
+      .and_then(|vent| vent.value().clone())
+  }
+
+  fn contains_key<Q>(&self, key: &Q, version: u64) -> bool
+  where
+    K: Borrow<Q>,
+    Q: Ord + ?Sized,
+  {
+    match self.inner.map.get(key) {
+      None => false,
+      Some(values) => values
+        .value()
+        .upper_bound(Bound::Included(&version))
+        .is_some(),
+    }
+  }
+
+  fn get_all_versions<'a, 'b: 'a, Q>(
+    &'a self,
+    key: &'b Q,
+    version: u64,
+  ) -> Option<AllVersions<'a, K, V>>
+  where
+    K: Borrow<Q>,
+    Q: Ord + ?Sized,
+  {
+    self.inner.map.get(key).and_then(move |values| {
+      let ents = values.value();
+      if ents.is_empty() {
+        return None;
+      }
+
+      let min = *ents.front().unwrap().key();
+      if min > version {
+        return None;
+      }
+
+      Some(AllVersions {
+        max_version: version,
+        min_version: min,
+        current_version: version,
+        entries: values,
+      })
+    })
+  }
+}
+
+/// An iterator over a all values with the same key in different versions.
+pub struct AllVersions<'a, K, V> {
+  max_version: u64,
+  min_version: u64,
+  current_version: u64,
+  entries: MapEntry<'a, K, SkipMap<u64, Option<Arc<V>>>>,
+}
+
+impl<'a, K, V> Clone for AllVersions<'a, K, V> {
+  fn clone(&self) -> Self {
+    Self {
+      max_version: self.max_version,
+      min_version: self.min_version,
+      current_version: self.current_version,
+      entries: self.entries.clone(),
+    }
+  }
+}
+
+impl<'a, K, V> Iterator for AllVersions<'a, K, V> {
+  type Item = Option<Arc<V>>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    if self.current_version >= self.max_version {
+      return None;
+    }
+
+    self
+      .entries
+      .value()
+      .upper_bound(Bound::Included(&self.current_version))
+      .map(|ent| {
+        let ent_version = *ent.key();
+
+        if self.current_version != ent_version {
+          self.current_version = ent_version;
+        } else {
+          self.current_version += 1;
+        }
+
+        ent.value().clone()
+      })
+  }
+
+  fn last(mut self) -> Option<Self::Item>
+  where
+    Self: Sized,
+  {
+    self
+      .entries
+      .value()
+      .lower_bound(Bound::Included(&self.max_version))
+      .map(|ent| {
+        self.current_version = *ent.key();
+        ent.value().clone()
+      })
+  }
+}
+
+impl<'a, K, V> FusedIterator for AllVersions<'a, K, V> {}
+
+/// An iterator over a all values with the same key in different versions.
+pub struct AllVersionsWithPending<'a, K, V> {
+  pending: Option<Arc<V>>,
+  committed: Option<AllVersions<'a, K, V>>,
+}
+
+impl<'a, K, V> Clone for AllVersionsWithPending<'a, K, V> {
+  fn clone(&self) -> Self {
+    Self {
+      pending: self.pending.clone(),
+      committed: self.committed.clone(),
+    }
+  }
+}
+
+impl<'a, K, V> Iterator for AllVersionsWithPending<'a, K, V> {
+  type Item = Option<Arc<V>>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    if let Some(p) = self.pending.take() {
+      return Some(Some(p));
+    }
+
+    if let Some(committed) = &mut self.committed {
+      committed.next()
+    } else {
+      None
+    }
+  }
+
+  fn last(mut self) -> Option<Self::Item>
+  where
+    Self: Sized,
+  {
+    if let Some(committed) = self.committed.take() {
+      return committed.last();
+    }
+
+    self.pending.take().map(Some)
+  }
+}
+
+impl<'a, K, V> FusedIterator for AllVersionsWithPending<'a, K, V> {}
