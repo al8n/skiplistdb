@@ -6,6 +6,7 @@ pub use read::*;
 mod write;
 pub use write::*;
 
+
 struct Inner<K, V, S = std::hash::DefaultHasher> {
   tm: Tm<K, V, HashCm<K, S>, PendingMap<K, V>>,
   map: SkipMap<K, SkipMap<u64, Option<Arc<V>>>>,
@@ -154,6 +155,79 @@ where
   }
 }
 
+/// A reference to an entry in the write transaction.
+pub struct EntryRef<'a, K, V> {
+  ent: mwmr::EntryRef<'a, K, V>,
+}
+
+impl<'a, K, V> Clone for EntryRef<'a, K, V> {
+  #[inline]
+  fn clone(&self) -> Self {
+    *self
+  }
+}
+
+impl<'a, K, V> Copy for EntryRef<'a, K, V> {}
+
+impl<'a, K, V> EntryRef<'a, K, V> {
+  #[inline]
+  pub const fn new(ent: mwmr::EntryRef<'a, K, V>) -> Self {
+    Self { ent }
+  }
+
+  #[inline]
+  pub fn value(&self) -> &V {
+    self.ent.value().unwrap()
+  }
+
+  #[inline]
+  pub const fn key(&self) -> &K {
+    self.ent.key()
+  }
+
+  #[inline]
+  pub const fn version(&self) -> u64 {
+    self.ent.version()
+  }
+}
+
+/// A reference to an entry in the write transaction. If the value is None, it means that the key is removed.
+pub struct OptionEntryRef<'a, K, V> {
+  ent: mwmr::EntryRef<'a, K, V>,
+}
+
+impl<'a, K, V> Clone for OptionEntryRef<'a, K, V> {
+  #[inline]
+  fn clone(&self) -> Self {
+    *self
+  }
+}
+
+impl<'a, K, V> Copy for OptionEntryRef<'a, K, V> {}
+
+
+impl<'a, K, V> OptionEntryRef<'a, K, V> {
+  #[inline]
+  pub const fn new(ent: mwmr::EntryRef<'a, K, V>) -> Self {
+    Self { ent }
+  }
+
+  #[inline]
+  pub fn value(&self) -> Option<&V> {
+    self.ent.value()
+  }
+
+  #[inline]
+  pub const fn key(&self) -> &K {
+    self.ent.key()
+  }
+
+  #[inline]
+  pub const fn version(&self) -> u64 {
+    self.ent.version()
+  }
+}
+
 /// An iterator over a all values with the same key in different versions.
 pub struct AllVersions<'a, K, V> {
   max_version: u64,
@@ -217,7 +291,7 @@ impl<'a, K, V> FusedIterator for AllVersions<'a, K, V> {}
 
 /// An iterator over a all values with the same key in different versions.
 pub struct AllVersionsWithPending<'a, K, V> {
-  pending: Option<Arc<V>>,
+  pending: Option<OptionEntryRef<'a, K, V>>,
   committed: Option<AllVersions<'a, K, V>>,
 }
 
@@ -231,15 +305,15 @@ impl<'a, K, V> Clone for AllVersionsWithPending<'a, K, V> {
 }
 
 impl<'a, K, V> Iterator for AllVersionsWithPending<'a, K, V> {
-  type Item = Option<Arc<V>>;
+  type Item = Either<OptionEntryRef<'a, K ,V>, Option<Arc<V>>>;
 
   fn next(&mut self) -> Option<Self::Item> {
     if let Some(p) = self.pending.take() {
-      return Some(Some(p));
+      return Some(Either::Left(p));
     }
 
     if let Some(committed) = &mut self.committed {
-      committed.next()
+      committed.next().map(Either::Right)
     } else {
       None
     }
@@ -250,10 +324,10 @@ impl<'a, K, V> Iterator for AllVersionsWithPending<'a, K, V> {
     Self: Sized,
   {
     if let Some(committed) = self.committed.take() {
-      return committed.last();
+      return committed.last().map(Either::Right);
     }
 
-    self.pending.take().map(Some)
+    self.pending.take().map(Either::Left)
   }
 }
 

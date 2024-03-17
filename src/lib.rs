@@ -101,7 +101,8 @@ impl Options {
   }
 }
 
-struct PendingMap<K, V> {
+/// Pending write manger implementation for [`EquivalentDB`] and [`ComparableDB`].
+pub struct PendingMap<K, V> {
   map: BTreeMap<K, EntryValue<V>>,
   opts: Options,
 }
