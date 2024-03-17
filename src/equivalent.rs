@@ -1,6 +1,9 @@
 use super::*;
 
+use std::{cmp, collections::btree_map::Iter as BTreeMapIter};
+
 mod read;
+use mwmr::Marker;
 pub use read::*;
 
 mod write;
@@ -245,6 +248,30 @@ where
     let iter = self.inner.map.iter();
     AllVersionsIter { iter, version }
   }
+
+  fn range<Q, R>(&self, range: R, version: u64) -> Range<'_, Q, R, K, V>
+  where
+    K: Borrow<Q>,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+  {
+    Range {
+      range: self.inner.map.range(range),
+      version,
+    }
+  }
+
+  fn range_all_versions<Q, R>(&self, range: R, version: u64) -> AllVersionsRange<'_, Q, R, K, V>
+  where
+    K: Borrow<Q>,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+  {
+    AllVersionsRange {
+      range: self.inner.map.range(range),
+      version,
+    }
+  }
 }
 
 /// An iterator over a all values with the same key in different versions.
@@ -270,10 +297,6 @@ impl<'a, K, V> Iterator for AllVersions<'a, K, V> {
   type Item = Option<Arc<V>>;
 
   fn next(&mut self) -> Option<Self::Item> {
-    if self.current_version >= self.max_version {
-      return None;
-    }
-
     self
       .entries
       .value()
@@ -358,6 +381,15 @@ pub struct ItemRef<'a, K, V> {
   ent: MapEntry<'a, K, SkipMap<u64, Option<Arc<V>>>>,
 }
 
+impl<'a, K, V> Clone for ItemRef<'a, K, V> {
+  fn clone(&self) -> Self {
+    Self {
+      version: self.version,
+      ent: self.ent.clone(),
+    }
+  }
+}
+
 impl<'a, K, V> ItemRef<'a, K, V> {
   /// Get the key of the entry.
   #[inline]
@@ -381,7 +413,7 @@ impl<'a, K, V> ItemRef<'a, K, V> {
   }
 }
 
-/// An iterator over the entries of a `EquivalentDB`.
+/// An iterator over the entries of the database.
 pub struct Iter<'a, K, V> {
   iter: crossbeam_skiplist::map::Iter<'a, K, SkipMap<u64, Option<Arc<V>>>>,
   version: u64,
@@ -437,10 +469,133 @@ where
   }
 }
 
-impl<'a, K, V> FusedIterator for Iter<'a, K, V> where K: Ord {}
+/// Iterator over the entries of the write transaction.
+pub struct WriteTransactionIter<'a, K, V, S> {
+  pendings: BTreeMapIter<'a, K, EntryValue<V>>,
+  committed: Iter<'a, K, V>,
+  next_pending: Option<(&'a K, &'a EntryValue<V>)>,
+  next_committed: Option<ItemRef<'a, K, V>>,
+  last_yielded_key: Option<Either<&'a K, ItemRef<'a, K, V>>>,
+  marker: Option<Marker<'a, HashCm<K, S>>>,
+}
 
+impl<'a, K, V, S> WriteTransactionIter<'a, K, V, S>
+where
+  S: BuildHasher + 'static,
+  K: Ord + core::hash::Hash + Eq + 'static,
+{
+  fn advance_pending(&mut self) {
+    self.next_pending = self.pendings.next();
+  }
 
-/// An iterator over the entries of a `EquivalentDB`.
+  fn advance_committed(&mut self) {
+    self.next_committed = self.committed.next();
+    if let (Some(item), Some(marker)) = (&self.next_committed, &mut self.marker) {
+      marker.mark(item.key());
+    }
+  }
+
+  fn new(
+    pendings: BTreeMapIter<'a, K, EntryValue<V>>,
+    committed: Iter<'a, K, V>,
+    marker: Option<Marker<'a, HashCm<K, S>>>,
+  ) -> Self {
+    let mut iterator = WriteTransactionIter {
+      pendings,
+      committed,
+      next_pending: None,
+      next_committed: None,
+      last_yielded_key: None,
+      marker,
+    };
+
+    iterator.advance_pending();
+    iterator.advance_committed();
+
+    iterator
+  }
+}
+
+impl<'a, K, V, S> Iterator for WriteTransactionIter<'a, K, V, S>
+where
+  K: Ord + core::hash::Hash + Eq + 'static,
+  S: BuildHasher + 'static,
+{
+  type Item = Either<(&'a K, &'a V), ItemRef<'a, K, V>>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    loop {
+      match (self.next_pending, &self.next_committed) {
+        // Both pending and committed iterators have items to yield.
+        (Some((pending_key, _)), Some(committed)) => {
+          match pending_key.cmp(committed.key()) {
+            // Pending item has a smaller key, so yield this one.
+            cmp::Ordering::Less => {
+              let (key, value) = self.next_pending.take().unwrap();
+              self.advance_pending();
+              self.last_yielded_key = Some(Either::Left(key));
+              match &value.value {
+                Some(value) => return Some(Either::Left((key, value))),
+                None => continue,
+              }
+            }
+            // Keys are equal, so we prefer the pending item and skip the committed one.
+            cmp::Ordering::Equal => {
+              // Skip committed if it has the same key as pending
+              self.advance_committed();
+              // Loop again to check the next item without yielding anything this time.
+              continue;
+            }
+            // Committed item has a smaller key, so we consider yielding this one.
+            cmp::Ordering::Greater => {
+              let committed = self.next_committed.take().unwrap();
+              self.advance_committed(); // Prepare the next committed item for future iterations.
+                                        // Yield the committed item if it has not been yielded before.
+              if self.last_yielded_key.as_ref().map_or(true, |k| match k {
+                Either::Left(k) => *k != committed.key(),
+                Either::Right(item) => item.key() != committed.key(),
+              }) {
+                self.last_yielded_key = Some(Either::Right(committed.clone()));
+                return Some(Either::Right(committed));
+              }
+            }
+          }
+        }
+        // Only pending items are left, so yield the next pending item.
+        (Some((_, _)), None) => {
+          let (key, value) = self.next_pending.take().unwrap();
+          self.advance_pending(); // Advance the pending iterator for the next iteration.
+          self.last_yielded_key = Some(Either::Left(key)); // Update the last yielded key.
+          match &value.value {
+            Some(value) => return Some(Either::Left((key, value))),
+            None => continue,
+          }
+        }
+        // Only committed items are left, so yield the next committed item if it hasn't been yielded already.
+        (None, Some(committed)) => {
+          if self.last_yielded_key.as_ref().map_or(true, |k| match k {
+            Either::Left(k) => *k != committed.key(),
+            Either::Right(item) => item.key() != committed.key(),
+          }) {
+            let committed = self.next_committed.take().unwrap();
+            self.advance_committed(); // Advance the committed iterator for the next iteration.
+            self.last_yielded_key = Some(Either::Right(committed.clone()));
+            return Some(Either::Right(committed));
+          } else {
+            // The key has already been yielded, so move to the next.
+            self.advance_committed();
+            // Loop again to check the next item without yielding anything this time.
+            continue;
+          }
+        }
+        // Both iterators have no items left to yield.
+        (None, None) => return None,
+      }
+    }
+  }
+}
+
+/// An iterator over the entries of the database.
 pub struct AllVersionsIter<'a, K, V> {
   iter: crossbeam_skiplist::map::Iter<'a, K, SkipMap<u64, Option<Arc<V>>>>,
   version: u64,
@@ -508,4 +663,144 @@ where
   }
 }
 
-impl<'a, K, V> FusedIterator for AllVersionsIter<'a, K, V> where K: Ord {}
+/// An iterator over a subset of entries of the database.
+pub struct Range<'a, Q, R, K, V>
+where
+  K: Ord + Borrow<Q>,
+  R: RangeBounds<Q>,
+  Q: Ord + ?Sized,
+{
+  range: MapRange<'a, Q, R, K, SkipMap<u64, Option<Arc<V>>>>,
+  version: u64,
+}
+
+impl<'a, Q, R, K, V> Iterator for Range<'a, Q, R, K, V>
+where
+  K: Ord + Borrow<Q>,
+  R: RangeBounds<Q>,
+  Q: Ord + ?Sized,
+{
+  type Item = ItemRef<'a, K, V>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    loop {
+      let ent = self.range.next()?;
+      if let Some(version) = ent
+        .value()
+        .upper_bound(Bound::Included(&self.version))
+        .and_then(|ent| {
+          if ent.value().is_some() {
+            Some(*ent.key())
+          } else {
+            None
+          }
+        })
+      {
+        return Some(ItemRef { version, ent });
+      }
+    }
+  }
+}
+
+impl<'a, Q, R, K, V> DoubleEndedIterator for Range<'a, Q, R, K, V>
+where
+  K: Ord + Borrow<Q>,
+  R: RangeBounds<Q>,
+  Q: Ord + ?Sized,
+{
+  fn next_back(&mut self) -> Option<Self::Item> {
+    loop {
+      let ent = self.range.next_back()?;
+      if let Some(version) = ent
+        .value()
+        .lower_bound(Bound::Included(&self.version))
+        .and_then(|ent| {
+          if ent.value().is_some() {
+            Some(*ent.key())
+          } else {
+            None
+          }
+        })
+      {
+        return Some(ItemRef { version, ent });
+      }
+    }
+  }
+}
+
+/// An iterator over a subset of entries of the database.
+pub struct AllVersionsRange<'a, Q, R, K, V>
+where
+  K: Ord + Borrow<Q>,
+  R: RangeBounds<Q>,
+  Q: Ord + ?Sized,
+{
+  range: MapRange<'a, Q, R, K, SkipMap<u64, Option<Arc<V>>>>,
+  version: u64,
+}
+
+impl<'a, Q, R, K, V> Iterator for AllVersionsRange<'a, Q, R, K, V>
+where
+  K: Ord + Borrow<Q>,
+  R: RangeBounds<Q>,
+  Q: Ord + ?Sized,
+{
+  type Item = AllVersions<'a, K, V>;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    loop {
+      let ent = self.range.next()?;
+      let min = *ent.value().front().unwrap().key();
+      if let Some(version) = ent
+        .value()
+        .upper_bound(Bound::Included(&self.version))
+        .and_then(|ent| {
+          if ent.value().is_some() {
+            Some(*ent.key())
+          } else {
+            None
+          }
+        })
+      {
+        return Some(AllVersions {
+          max_version: version,
+          min_version: min,
+          current_version: version,
+          entries: ent,
+        });
+      }
+    }
+  }
+}
+
+impl<'a, Q, R, K, V> DoubleEndedIterator for AllVersionsRange<'a, Q, R, K, V>
+where
+  K: Ord + Borrow<Q>,
+  R: RangeBounds<Q>,
+  Q: Ord + ?Sized,
+{
+  fn next_back(&mut self) -> Option<Self::Item> {
+    loop {
+      let ent = self.range.next_back()?;
+      let min = *ent.value().front().unwrap().key();
+      if let Some(version) = ent
+        .value()
+        .lower_bound(Bound::Included(&self.version))
+        .and_then(|ent| {
+          if ent.value().is_some() {
+            Some(*ent.key())
+          } else {
+            None
+          }
+        })
+      {
+        return Some(AllVersions {
+          max_version: version,
+          min_version: min,
+          current_version: version,
+          entries: ent,
+        });
+      }
+    }
+  }
+}

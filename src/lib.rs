@@ -25,7 +25,8 @@ use crossbeam_skiplist::{
 };
 use either::Either;
 use mwmr::{
-  error::TransactionError, BTreeMapManager, Cm, EntryData, EntryValue, HashCm, Pwm, PwmComparable, Rtm, Tm, Wtm
+  error::TransactionError, BTreeMapManager, Cm, EntryData, EntryValue, HashCm, Pwm, PwmComparable,
+  Rtm, Tm, Wtm,
 };
 
 /// `EquivalentDB` implementation, which requires `K` implements both [`Hash`](core::hash::Hash) and [`Ord`].
@@ -183,11 +184,14 @@ where
     Ok(self.map.remove_entry(key))
   }
 
+  fn iter(&self) -> impl Iterator<Item = (&Self::Key, &EntryValue<Self::Value>)> {
+    self.map.iter()
+  }
+
   fn into_iter(self) -> impl Iterator<Item = (Self::Key, EntryValue<Self::Value>)> {
     core::iter::IntoIterator::into_iter(self.map)
   }
 }
-
 
 impl<K, V> PwmComparable for PendingMap<K, V>
 where
@@ -197,7 +201,7 @@ where
   fn get_comparable<Q>(&self, key: &Q) -> Result<Option<&EntryValue<Self::Value>>, Self::Error>
   where
     Self::Key: Borrow<Q>,
-    Q: Ord + ?Sized
+    Q: Ord + ?Sized,
   {
     Ok(self.map.get(key))
   }
@@ -208,7 +212,7 @@ where
   ) -> Result<Option<(&Self::Key, &EntryValue<Self::Value>)>, Self::Error>
   where
     Self::Key: Borrow<Q>,
-    Q: Ord + ?Sized
+    Q: Ord + ?Sized,
   {
     Ok(self.map.get_key_value(key))
   }
@@ -216,7 +220,7 @@ where
   fn contains_key_comparable<Q>(&self, key: &Q) -> Result<bool, Self::Error>
   where
     Self::Key: Borrow<Q>,
-    Q: Ord + ?Sized
+    Q: Ord + ?Sized,
   {
     Ok(self.map.contains_key(key))
   }
@@ -227,7 +231,7 @@ where
   ) -> Result<Option<(Self::Key, EntryValue<Self::Value>)>, Self::Error>
   where
     Self::Key: Borrow<Q>,
-    Q: Ord + ?Sized
+    Q: Ord + ?Sized,
   {
     Ok(self.map.remove_entry(key))
   }

@@ -64,6 +64,30 @@ where
     let version = self.rtm.version();
     self.db.iter_all_versions(version)
   }
+
+  /// Returns an iterator over the subset of entries of the database.
+  #[inline]
+  pub fn range<Q, R>(&self, range: R) -> Range<'_, Q, R, K, V>
+  where
+    K: Borrow<Q>,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+  {
+    let version = self.rtm.version();
+    self.db.range(range, version)
+  }
+
+  /// Returns an iterator over the subset of entries (all versions, including removed one) of the database.
+  #[inline]
+  pub fn range_all_versions<Q, R>(&self, range: R) -> AllVersionsRange<'_, Q, R, K, V>
+  where
+    K: Borrow<Q>,
+    R: RangeBounds<Q>,
+    Q: Ord + ?Sized,
+  {
+    let version = self.rtm.version();
+    self.db.range_all_versions(range, version)
+  }
 }
 
 impl<K, V, S> Clone for ReadTransaction<K, V, S> {

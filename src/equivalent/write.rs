@@ -34,29 +34,12 @@ where
   V: 'static,
   S: BuildHasher + 'static,
 {
-  /// Get a value from the database.
-  #[inline]
-  pub fn get<'a, 'b: 'a, Q>(&'a mut self, key: &'b Q) -> Result<Option<Either<EntryRef<'a, K, V>, Arc<V>>>, TransactionError<HashCm<K, S>, PendingMap<K, V>>>
-  where
-    K: Borrow<Q>,
-    Q: core::hash::Hash + Eq + Ord + ?Sized,
-  {
-    let version = self.wtm.version();
-    match self.wtm.get_equivalent_cm_comparable_pm(key)? {
-      Some(v) => if v.value().is_some() {
-        Ok(Some(Either::Left(EntryRef::new(v))))
-      } else {
-        Ok(None)
-      },
-      None => {
-        Ok(self.db.get(key, version).map(Either::Right))
-      },
-    }
-  }
-
   /// Returns true if the given key exists in the database.
   #[inline]
-  pub fn contains_key<Q>(&mut self, key: &Q) -> Result<bool, TransactionError<HashCm<K, S>, PendingMap<K, V>>>
+  pub fn contains_key<Q>(
+    &mut self,
+    key: &Q,
+  ) -> Result<bool, TransactionError<HashCm<K, S>, PendingMap<K, V>>>
   where
     K: Borrow<Q>,
     Q: core::hash::Hash + Eq + Ord + ?Sized,
@@ -69,12 +52,41 @@ where
     }
   }
 
+  /// Get a value from the database.
+  #[inline]
+  pub fn get<'a, 'b: 'a, Q>(
+    &'a mut self,
+    key: &'b Q,
+  ) -> Result<
+    Option<Either<EntryRef<'a, K, V>, Arc<V>>>,
+    TransactionError<HashCm<K, S>, PendingMap<K, V>>,
+  >
+  where
+    K: Borrow<Q>,
+    Q: core::hash::Hash + Eq + Ord + ?Sized,
+  {
+    let version = self.wtm.version();
+    match self.wtm.get_equivalent_cm_comparable_pm(key)? {
+      Some(v) => {
+        if v.value().is_some() {
+          Ok(Some(Either::Left(EntryRef::new(v))))
+        } else {
+          Ok(None)
+        }
+      }
+      None => Ok(self.db.get(key, version).map(Either::Right)),
+    }
+  }
+
   /// Get all the values in different versions for the given key. Including the removed ones.
   #[inline]
   pub fn get_all_versions<'a, 'b: 'a, Q>(
     &'a mut self,
     key: &'b Q,
-  ) -> Result<Option<AllVersionsWithPending<'a, K, V>>, TransactionError<HashCm<K, S>, PendingMap<K, V>>>
+  ) -> Result<
+    Option<AllVersionsWithPending<'a, K, V>>,
+    TransactionError<HashCm<K, S>, PendingMap<K, V>>,
+  >
   where
     K: Borrow<Q>,
     Q: core::hash::Hash + Ord + ?Sized,
@@ -91,5 +103,36 @@ where
       return Ok(None);
     }
     Ok(Some(AllVersionsWithPending { committed, pending }))
+  }
+
+  /// Insert a new key-value pair.
+  #[inline]
+  pub fn insert(
+    &mut self,
+    key: K,
+    value: V,
+  ) -> Result<(), TransactionError<HashCm<K, S>, PendingMap<K, V>>> {
+    self.wtm.insert(key, value)
+  }
+
+  /// Remove a key.
+  #[inline]
+  pub fn remove(&mut self, key: K) -> Result<(), TransactionError<HashCm<K, S>, PendingMap<K, V>>> {
+    self.wtm.remove(key)
+  }
+
+  /// Iterate over the entries of the write transaction.
+  #[inline]
+  pub fn iter(
+    &mut self,
+  ) -> Result<WriteTransactionIter<'_, K, V, S>, TransactionError<HashCm<K, S>, PendingMap<K, V>>>
+  {
+    let version = self.wtm.version();
+    let (marker, pm) = self.wtm.marker_with_pm()?;
+
+    let committed = self.db.iter(version);
+    let pendings = pm.map.iter();
+
+    Ok(WriteTransactionIter::new(pendings, committed, marker))
   }
 }
