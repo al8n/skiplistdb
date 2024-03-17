@@ -13,8 +13,6 @@ struct Inner<K, V, S = std::hash::DefaultHasher> {
   hasher: S,
   max_batch_size: u64,
   max_batch_entries: u64,
-  len: AtomicUsize,
-  len_including_versions: AtomicUsize,
 }
 
 impl<K, V, S> Inner<K, V, S> {
@@ -27,8 +25,6 @@ impl<K, V, S> Inner<K, V, S> {
       hasher,
       max_batch_size,
       max_batch_entries,
-      len: AtomicUsize::new(0),
-      len_including_versions: AtomicUsize::new(0),
     }
   }
 }
@@ -87,7 +83,14 @@ impl<K, V, S> EquivalentDB<K, V, S> {
   pub fn read(&self) -> ReadTransaction<K, V, S> {
     ReadTransaction::new(self.clone())
   }
+}
 
+impl<K, V, S> EquivalentDB<K, V, S>
+where
+  K: Ord + Eq + core::hash::Hash + 'static,
+  V: 'static,
+  S: BuildHasher + Clone + 'static,
+{
   /// Create a write transaction.
   #[inline]
   pub fn write(&self) -> WriteTransaction<K, V, S> {
@@ -170,21 +173,25 @@ impl<'a, K, V> Clone for EntryRef<'a, K, V> {
 impl<'a, K, V> Copy for EntryRef<'a, K, V> {}
 
 impl<'a, K, V> EntryRef<'a, K, V> {
+  /// Create a new entry reference.
   #[inline]
   pub const fn new(ent: mwmr::EntryRef<'a, K, V>) -> Self {
     Self { ent }
   }
 
+  /// Get the value of the entry.
   #[inline]
   pub fn value(&self) -> &V {
     self.ent.value().unwrap()
   }
 
+  /// Get the key of the entry.
   #[inline]
   pub const fn key(&self) -> &K {
     self.ent.key()
   }
 
+  /// Get the version of the entry.
   #[inline]
   pub const fn version(&self) -> u64 {
     self.ent.version()
@@ -207,21 +214,25 @@ impl<'a, K, V> Copy for OptionEntryRef<'a, K, V> {}
 
 
 impl<'a, K, V> OptionEntryRef<'a, K, V> {
+  /// Create a new entry reference.
   #[inline]
   pub const fn new(ent: mwmr::EntryRef<'a, K, V>) -> Self {
     Self { ent }
   }
 
+  /// Get the value of the entry.
   #[inline]
   pub fn value(&self) -> Option<&V> {
     self.ent.value()
   }
 
+  /// Get the key of the entry.
   #[inline]
   pub const fn key(&self) -> &K {
     self.ent.key()
   }
 
+  /// Get the version of the entry.
   #[inline]
   pub const fn version(&self) -> u64 {
     self.ent.version()
@@ -298,7 +309,7 @@ pub struct AllVersionsWithPending<'a, K, V> {
 impl<'a, K, V> Clone for AllVersionsWithPending<'a, K, V> {
   fn clone(&self) -> Self {
     Self {
-      pending: self.pending.clone(),
+      pending: self.pending,
       committed: self.committed.clone(),
     }
   }
