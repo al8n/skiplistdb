@@ -50,6 +50,20 @@ where
     let version = self.rtm.version();
     self.db.get_all_versions(key, version)
   }
+
+  /// Returns an iterator over the entries of the database.
+  #[inline]
+  pub fn iter(&self) -> Iter<'_, K, V> {
+    let version = self.rtm.version();
+    self.db.iter(version)
+  }
+
+  /// Returns an iterator over the entries (all versions, including removed one) of the database.
+  #[inline]
+  pub fn iter_all_versions(&self) -> AllVersionsIter<'_, K, V> {
+    let version = self.rtm.version();
+    self.db.iter_all_versions(version)
+  }
 }
 
 impl<K, V, S> Clone for ReadTransaction<K, V, S> {

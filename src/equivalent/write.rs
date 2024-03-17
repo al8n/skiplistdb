@@ -1,7 +1,3 @@
-use std::hash::BuildHasher;
-
-use mwmr::{Cm, EntryDataRef};
-
 use super::*;
 
 /// A read only transaction over the [`EquivalentDB`],
@@ -48,12 +44,12 @@ where
     let version = self.wtm.version();
     match self.wtm.get_equivalent_cm_comparable_pm(key)? {
       Some(v) => if v.value().is_some() {
-        return Ok(Some(Either::Left(EntryRef::new(v))));
+        Ok(Some(Either::Left(EntryRef::new(v))))
       } else {
-        return Ok(None);
+        Ok(None)
       },
       None => {
-        Ok(self.db.get(key, version).map(|v| Either::Right(v)))
+        Ok(self.db.get(key, version).map(Either::Right))
       },
     }
   }
