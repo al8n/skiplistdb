@@ -22,6 +22,7 @@ tokio = ["mwmr/tokio", "future"]
 async-std = ["mwmr/async-std", "future"]
 
 [dependencies]
+cheap-clone = "0.1"
 crossbeam-skiplist = "0.1"
 either = "1"
 mwmr = { path = "../txn/mwmr" }

@@ -26,7 +26,7 @@ use mwmr::{error::TransactionError, EntryValue, HashCm, Pwm, PwmComparable, Rtm,
 /// If your `K` does not implement [`Hash`](core::hash::Hash), you can use [`ComparableDB`] instead.
 pub mod equivalent;
 
-/// `ComparableDB` implementation, which requires `K` implements [`Ord`]. If your `K` implements both [`Hash`](core::hash::Hash) and [`Ord`], you are recommended to use [`EquivalentDB`](crate::equivalent::EquivalentDB) instead.
+/// `ComparableDB` implementation, which requires `K` implements [`Ord`] and [`CheapClone`](cheap_clone::CheapClone). If your `K` implements both [`Hash`](core::hash::Hash) and [`Ord`], you are recommended to use [`EquivalentDB`](crate::equivalent::EquivalentDB) instead.
 pub mod comparable;
 
 /// The options used to create a new `EquivalentDB`.
