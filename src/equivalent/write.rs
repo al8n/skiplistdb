@@ -38,6 +38,117 @@ where
 impl<K, V, S> WriteTransaction<K, V, S>
 where
   K: Ord + core::hash::Hash + Eq + 'static,
+  V: Send + 'static,
+  S: BuildHasher + 'static,
+{
+  /// Commits the transaction, following these steps:
+  ///
+  /// 1. If there are no writes, return immediately.
+  ///
+  /// 2. Check if read rows were updated since txn started. If so, return `TransactionError::Conflict`.
+  ///
+  /// 3. If no conflict, generate a commit timestamp and update written rows' commit ts.
+  ///
+  /// 4. Batch up all writes, write them to database.
+  ///
+  /// 5. If callback is provided, Badger will return immediately after checking
+  /// for conflicts. Writes to the database will happen in the background.  If
+  /// there is a conflict, an error will be returned and the callback will not
+  /// run. If there are no conflicts, the callback will be called in the
+  /// background upon successful completion of writes or any error during write.
+  #[inline]
+  pub fn commit(&mut self) -> Result<(), WtmError<HashCm<K, S>, PendingMap<K, V>, core::convert::Infallible>> {
+    self.wtm.commit(|ents| {
+      self.db.apply(ents);
+      Ok(())
+    })
+  }
+}
+
+impl<K, V, S> WriteTransaction<K, V, S>
+where
+  K: Ord + core::hash::Hash + Eq + Send + Sync + 'static,
+  V: Send + Sync + 'static,
+  S: BuildHasher + Send + Sync + 'static,
+{
+  /// Acts like [`commit`](WriteTransaction::commit), but takes a callback, which gets run via a
+  /// thread to avoid blocking this function. Following these steps:
+  ///
+  /// 1. If there are no writes, return immediately, callback will be invoked.
+  ///
+  /// 2. Check if read rows were updated since txn started. If so, return `TransactionError::Conflict`.
+  ///
+  /// 3. If no conflict, generate a commit timestamp and update written rows' commit ts.
+  ///
+  /// 4. Batch up all writes, write them to database.
+  ///
+  /// 5. Return immediately after checking for conflicts.
+  /// If there is a conflict, an error will be returned immediately and the callback will not
+  /// run. If there are no conflicts, the callback will be called in the
+  /// background upon successful completion of writes or any error during write.
+  #[inline]
+  pub fn commit_with_callback<F, E, R>(&mut self, callback: impl FnOnce(Result<(), E>) -> R + Send + 'static) -> Result<std::thread::JoinHandle<R>, WtmError<HashCm<K, S>, PendingMap<K, V>, E>>
+  where
+    F: FnOnce(OneOrMore<Entry<K, V>>) -> Result<(), E> + Send + 'static,
+    E: std::error::Error,
+    R: Send + 'static,
+  {
+    let db = self.db.clone();
+    
+    self.wtm.commit_with_callback(move |ents| {
+      db.apply(ents);
+      Ok(())
+    }, callback)
+  }
+}
+
+#[cfg(feature = "future")]
+impl<K, V, H> WriteTransaction<K, V, H>
+where
+  K: Ord + core::hash::Hash + Eq + Send + Sync + 'static,
+  V: Send + Sync + 'static,
+  H: BuildHasher + Send + Sync + 'static,
+{
+  /// Acts like [`commit`](WriteTransaction::commit), but takes a future and a spawner, which gets run via a
+  /// task to avoid blocking this function. Following these steps:
+  ///
+  /// 1. If there are no writes, return immediately, a new task will be spawned, and future will be invoked.
+  ///
+  /// 2. Check if read rows were updated since txn started. If so, return `TransactionError::Conflict`.
+  ///
+  /// 3. If no conflict, generate a commit timestamp and update written rows' commit ts.
+  ///
+  /// 4. Batch up all writes, write them to database.
+  ///
+  /// 5. Return immediately after checking for conflicts.
+  /// If there is a conflict, an error will be returned immediately and the no task will be spawned
+  /// run. If there are no conflicts, a task will be spawned and the future will be called in the
+  /// background upon successful completion of writes or any error during write.
+  #[cfg_attr(docsrs, doc(cfg(feature = "future")))]
+  #[inline]
+  pub fn commit_with_task<F, E, R, AS>(
+    &mut self,
+    fut: impl FnOnce(Result<(), E>) -> R + Send + 'static,
+  ) -> Result<<AS as mwmr::AsyncSpawner>::JoinHandle<R>, WtmError<HashCm<K, H>, PendingMap<K, V>, E>>
+  where
+    F: FnOnce(OneOrMore<Entry<K, V>>) -> Result<(), E> + Send + 'static,
+    E: std::error::Error,
+    R: Send + 'static,
+    AS: mwmr::AsyncSpawner,
+  {
+    let db = self.db.clone();
+
+    self.wtm.commit_with_task::<_, _, _, AS>(move |ents| {
+      db.apply(ents);
+      Ok(())
+    }, fut)
+  }
+}
+
+
+impl<K, V, S> WriteTransaction<K, V, S>
+where
+  K: Ord + core::hash::Hash + Eq + 'static,
   V: 'static,
   S: BuildHasher + 'static,
 {
@@ -128,15 +239,6 @@ where
     self.wtm.remove(key)
   }
 
-  /// Commit the transaction.
-  #[inline]
-  pub fn commit(&mut self) -> Result<(), WtmError<HashCm<K, S>, PendingMap<K, V>, core::convert::Infallible>> {
-    self.wtm.commit(|ents| {
-      self.db.apply(ents);
-      Ok(())
-    })
-  }
-
   /// Iterate over the entries of the write transaction.
   #[inline]
   pub fn iter(
@@ -192,3 +294,4 @@ where
     Ok(WriteTransactionRange::new(pendings, committed, marker))
   }
 }
+

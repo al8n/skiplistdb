@@ -319,19 +319,33 @@ where
 impl<K, V, S> EquivalentDB<K, V, S>
 where
   K: Ord,
+  V: Send + 'static,
 {
   fn apply(&self, entries: OneOrMore<mwmr::Entry<K, V>>,) {
     for ent in entries {
-      match ent.data {
-        mwmr::EntryData::Insert { key, value } => {}
-
-        
-      }
       let version = ent.version();
-      self.inner.map.get_or_insert(key, value)
+      match ent.data {
+        mwmr::EntryData::Insert { key, value } => {
+          let values = self.inner.map.get_or_insert(key, SkipMap::new());
+          values.value().insert(version, Some(value));
+        }
+        mwmr::EntryData::Remove(key) => {
+          if let Some(values) = self.inner.map.get(&key) {
+            let values = values.value();
+            if !values.is_empty() {
+              values.insert(version, None);
+            }
+          }
+        }
+      }
     }
   }
+}
 
+impl<K, V, S> EquivalentDB<K, V, S>
+where
+  K: Ord,
+{
   fn get<Q>(&self, key: &Q, version: u64) -> Option<Ref<'_, K, V>>
   where
     K: Borrow<Q>,

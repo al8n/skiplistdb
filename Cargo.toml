@@ -15,6 +15,11 @@ harness = false
 
 [features]
 default = []
+future = ["mwmr/future"]
+
+smol = ["mwmr/smol", "future"]
+tokio = ["mwmr/tokio", "future"]
+async-std = ["mwmr/async-std", "future"]
 
 [dependencies]
 crossbeam-skiplist = "0.1"

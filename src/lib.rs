@@ -8,15 +8,11 @@
 
 use std::{
   borrow::Borrow,
-  collections::{BTreeMap, HashSet},
-  hash::{BuildHasher, DefaultHasher},
+  collections::BTreeMap,
+  hash::BuildHasher,
   iter::FusedIterator,
-  mem,
   ops::{Bound, RangeBounds},
-  sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-  },
+  sync::Arc
 };
 
 use crossbeam_skiplist::{
@@ -25,7 +21,7 @@ use crossbeam_skiplist::{
 };
 use either::Either;
 use mwmr::{
-  error::TransactionError, BTreeMapManager, Cm, EntryData, EntryValue, HashCm, Pwm, PwmComparable,
+  error::TransactionError, EntryValue, HashCm, Pwm, PwmComparable,
   Rtm, Tm, Wtm,
 };
 
