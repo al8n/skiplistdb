@@ -61,7 +61,7 @@ where
     &mut self,
   ) -> Result<(), WtmError<HashCm<K, S>, PendingMap<K, V>, core::convert::Infallible>> {
     self.wtm.commit(|ents| {
-      self.db.apply(ents);
+      self.db.inner.map.apply(ents);
       Ok(())
     })
   }
@@ -102,7 +102,7 @@ where
 
     self.wtm.commit_with_callback(
       move |ents| {
-        db.apply(ents);
+        db.inner.map.apply(ents);
         Ok(())
       },
       callback,
@@ -148,7 +148,7 @@ where
 
     self.wtm.commit_with_task::<_, _, _, AS>(
       move |ents| {
-        db.apply(ents);
+        db.inner.map.apply(ents);
         Ok(())
       },
       fut,
@@ -176,7 +176,7 @@ where
     match self.wtm.contains_key_equivalent_cm_comparable_pm(key)? {
       Some(true) => Ok(true),
       Some(false) => Ok(false),
-      None => Ok(self.db.contains_key(key, version)),
+      None => Ok(self.db.inner.map.contains_key(key, version)),
     }
   }
 
@@ -202,7 +202,7 @@ where
           Ok(None)
         }
       }
-      None => Ok(self.db.get(key, version).map(Either::Right)),
+      None => Ok(self.db.inner.map.get(key, version).map(Either::Right)),
     }
   }
 
@@ -225,7 +225,7 @@ where
       pending = Some(OptionPendingRef::new(ent));
     }
 
-    let committed = self.db.get_all_versions(key, version);
+    let committed = self.db.inner.map.get_all_versions(key, version);
 
     if committed.is_none() && pending.is_none() {
       return Ok(None);
@@ -258,7 +258,7 @@ where
     let version = self.wtm.version();
     let (marker, pm) = self.wtm.marker_with_pm()?;
 
-    let committed = self.db.iter(version);
+    let committed = self.db.inner.map.iter(version);
     let pendings = pm.map.iter();
 
     Ok(WriteTransactionIter::new(pendings, committed, marker))
@@ -275,7 +275,7 @@ where
     let version = self.wtm.version();
     let (marker, pm) = self.wtm.marker_with_pm()?;
 
-    let committed = self.db.iter_all_versions(version);
+    let committed = self.db.inner.map.iter_all_versions(version);
     let pendings = pm.map.iter();
 
     Ok(WriteTransactionAllVersionsIter::new(
@@ -302,7 +302,7 @@ where
     let start = range.start_bound();
     let end = range.end_bound();
     let pendings = pm.map.range((start, end));
-    let committed = self.db.range(range, version);
+    let committed = self.db.inner.map.range(range, version);
 
     Ok(WriteTransactionRange::new(pendings, committed, marker))
   }
@@ -326,7 +326,7 @@ where
     let start = range.start_bound();
     let end = range.end_bound();
     let pendings = pm.map.range((start, end));
-    let committed = self.db.range_all_versions(range, version);
+    let committed = self.db.inner.map.range_all_versions(range, version);
 
     Ok(WriteTransactionAllVersionsRange::new(
       &self.db, version, pendings, committed, marker,
