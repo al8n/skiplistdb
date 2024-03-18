@@ -58,7 +58,7 @@ where
     &'a mut self,
     key: &'b Q,
   ) -> Result<
-    Option<Either<EntryRef<'a, K, V>, Arc<V>>>,
+    Option<Either<PendingRef<'a, K, V>, Ref<'a, K, V>>>,
     TransactionError<HashCm<K, S>, PendingMap<K, V>>,
   >
   where
@@ -69,7 +69,7 @@ where
     match self.wtm.get_equivalent_cm_comparable_pm(key)? {
       Some(v) => {
         if v.value().is_some() {
-          Ok(Some(Either::Left(EntryRef::new(v))))
+          Ok(Some(Either::Left(PendingRef::new(v))))
         } else {
           Ok(None)
         }
@@ -84,7 +84,7 @@ where
     &'a mut self,
     key: &'b Q,
   ) -> Result<
-    Option<AllVersionsWithPending<'a, K, V>>,
+    Option<WriteTransactionAllVersions<'a, K, V>>,
     TransactionError<HashCm<K, S>, PendingMap<K, V>>,
   >
   where
@@ -94,7 +94,7 @@ where
     let version = self.wtm.version();
     let mut pending = None;
     if let Some(ent) = self.wtm.get_equivalent_cm_comparable_pm(key)? {
-      pending = Some(OptionEntryRef::new(ent));
+      pending = Some(OptionPendingRef::new(ent));
     }
 
     let committed = self.db.get_all_versions(key, version);
@@ -102,7 +102,7 @@ where
     if committed.is_none() && pending.is_none() {
       return Ok(None);
     }
-    Ok(Some(AllVersionsWithPending { committed, pending }))
+    Ok(Some(WriteTransactionAllVersions { committed, pending }))
   }
 
   /// Insert a new key-value pair.

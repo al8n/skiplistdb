@@ -20,7 +20,7 @@ where
 {
   /// Get a value from the database.
   #[inline]
-  pub fn get<Q>(&self, key: &Q) -> Option<Arc<V>>
+  pub fn get<Q>(&self, key: &Q) -> Option<Ref<'_, K, V>>
   where
     K: Borrow<Q>,
     Q: Ord + ?Sized,

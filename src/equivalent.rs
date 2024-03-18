@@ -10,23 +10,148 @@ mod write;
 pub use write::*;
 
 /// A reference to an entry in the write transaction.
-pub struct EntryRef<'a, K, V> {
+pub struct Entry<'a, K, V> {
+  ent: MapEntry<'a, u64, Option<V>>,
+  key: &'a K,
+  version: u64,
+}
+
+impl<'a, K, V> Clone for Entry<'a, K, V> {
+  #[inline]
+  fn clone(&self) -> Self {
+    Self {
+      ent: self.ent.clone(),
+      version: self.version,
+      key: self.key,
+    }
+  }
+}
+
+impl<'a, K, V> Entry<'a, K, V> {
+  /// Get the value of the entry.
+  #[inline]
+  pub fn value(&self) -> &V {
+    self.ent.value().as_ref().unwrap()
+  }
+
+  /// Get the key of the entry.
+  #[inline]
+  pub const fn key(&self) -> &K {
+    self.key
+  }
+
+  /// Get the version of the entry.
+  #[inline]
+  pub const fn version(&self) -> u64 {
+    self.version
+  }
+}
+
+/// A reference to an entry in the write transaction.
+pub struct Ref<'a, K, V> {
+  ent: MapEntry<'a, K, SkipMap<u64, Option<V>>>,
+  version: u64,
+}
+
+impl<'a, K, V> Clone for Ref<'a, K, V> {
+  #[inline]
+  fn clone(&self) -> Self {
+    Self {
+      ent: self.ent.clone(),
+      version: self.version,
+    }
+  }
+}
+
+impl<'a, K, V> Ref<'a, K, V> {
+  /// Get the value of the entry.
+  #[inline]
+  pub fn entry(&self) -> Entry<'_, K, V> {
+    let ent = self.ent.value().get(&self.version).unwrap();
+
+    Entry {
+      ent,
+      key: self.ent.key(),
+      version: self.version,
+    }
+  }
+
+  /// Get the key of the ref.
+  #[inline]
+  pub fn key(&self) -> &K {
+    self.ent.key()
+  }
+
+  /// Get the version of the entry.
+  #[inline]
+  pub const fn version(&self) -> u64 {
+    self.version
+  }
+}
+
+/// A reference to an entry in the write transaction.
+pub struct OptionRef<'a, K, V> {
+  ent: MapEntry<'a, K, SkipMap<u64, Option<V>>>,
+  version: u64,
+}
+
+impl<'a, K, V> Clone for OptionRef<'a, K, V> {
+  #[inline]
+  fn clone(&self) -> Self {
+    Self {
+      ent: self.ent.clone(),
+      version: self.version,
+    }
+  }
+}
+
+impl<'a, K, V> OptionRef<'a, K, V> {
+  /// Get the value of the entry. `None` this entry is marked as removed.
+  #[inline]
+  pub fn entry(&self) -> Option<Entry<'_, K, V>> {
+    let ent = self.ent.value().get(&self.version).unwrap();
+
+    if ent.value().is_some() {
+      return Some(Entry {
+        ent,
+        key: self.ent.key(),
+        version: self.version,
+      });
+    }
+
+    None
+  }
+
+  /// Get the key of the ref.
+  #[inline]
+  pub fn key(&self) -> &K {
+    self.ent.key()
+  }
+
+  /// Get the version of the entry.
+  #[inline]
+  pub const fn version(&self) -> u64 {
+    self.version
+  }
+}
+
+/// A reference to an entry in the write transaction.
+pub struct PendingRef<'a, K, V> {
   ent: mwmr::EntryRef<'a, K, V>,
 }
 
-impl<'a, K, V> Clone for EntryRef<'a, K, V> {
+impl<'a, K, V> Clone for PendingRef<'a, K, V> {
   #[inline]
   fn clone(&self) -> Self {
     *self
   }
 }
 
-impl<'a, K, V> Copy for EntryRef<'a, K, V> {}
+impl<'a, K, V> Copy for PendingRef<'a, K, V> {}
 
-impl<'a, K, V> EntryRef<'a, K, V> {
-  /// Create a new entry reference.
+impl<'a, K, V> PendingRef<'a, K, V> {
   #[inline]
-  pub const fn new(ent: mwmr::EntryRef<'a, K, V>) -> Self {
+  const fn new(ent: mwmr::EntryRef<'a, K, V>) -> Self {
     Self { ent }
   }
 
@@ -50,23 +175,23 @@ impl<'a, K, V> EntryRef<'a, K, V> {
 }
 
 /// A reference to an entry in the write transaction. If the value is None, it means that the key is removed.
-pub struct OptionEntryRef<'a, K, V> {
+pub struct OptionPendingRef<'a, K, V> {
   ent: mwmr::EntryRef<'a, K, V>,
 }
 
-impl<'a, K, V> Clone for OptionEntryRef<'a, K, V> {
+impl<'a, K, V> Clone for OptionPendingRef<'a, K, V> {
   #[inline]
   fn clone(&self) -> Self {
     *self
   }
 }
 
-impl<'a, K, V> Copy for OptionEntryRef<'a, K, V> {}
+impl<'a, K, V> Copy for OptionPendingRef<'a, K, V> {}
 
-impl<'a, K, V> OptionEntryRef<'a, K, V> {
+impl<'a, K, V> OptionPendingRef<'a, K, V> {
   /// Create a new entry reference.
   #[inline]
-  pub const fn new(ent: mwmr::EntryRef<'a, K, V>) -> Self {
+  const fn new(ent: mwmr::EntryRef<'a, K, V>) -> Self {
     Self { ent }
   }
 
@@ -91,7 +216,7 @@ impl<'a, K, V> OptionEntryRef<'a, K, V> {
 
 struct Inner<K, V, S = std::hash::DefaultHasher> {
   tm: Tm<K, V, HashCm<K, S>, PendingMap<K, V>>,
-  map: SkipMap<K, SkipMap<u64, Option<Arc<V>>>>,
+  map: SkipMap<K, SkipMap<u64, Option<V>>>,
   hasher: S,
   max_batch_size: u64,
   max_batch_entries: u64,
@@ -184,16 +309,24 @@ impl<K, V, S> EquivalentDB<K, V, S>
 where
   K: Ord,
 {
-  fn get<Q>(&self, key: &Q, version: u64) -> Option<Arc<V>>
+  fn get<Q>(&self, key: &Q, version: u64) -> Option<Ref<'_, K, V>>
   where
     K: Borrow<Q>,
     Q: Ord + ?Sized,
   {
     let ent = self.inner.map.get(key)?;
-    ent
+    let version = ent
       .value()
       .upper_bound(Bound::Included(&version))
-      .and_then(|vent| vent.value().clone())
+      .and_then(|v| {
+        if v.value().is_some() {
+          Some(*v.key())
+        } else {
+          None
+        }
+      })?;
+
+    Some(Ref { ent, version })
   }
 
   fn contains_key<Q>(&self, key: &Q, version: u64) -> bool
@@ -279,7 +412,7 @@ pub struct AllVersions<'a, K, V> {
   max_version: u64,
   min_version: u64,
   current_version: u64,
-  entries: MapEntry<'a, K, SkipMap<u64, Option<Arc<V>>>>,
+  entries: MapEntry<'a, K, SkipMap<u64, Option<V>>>,
 }
 
 impl<'a, K, V> Clone for AllVersions<'a, K, V> {
@@ -294,7 +427,7 @@ impl<'a, K, V> Clone for AllVersions<'a, K, V> {
 }
 
 impl<'a, K, V> Iterator for AllVersions<'a, K, V> {
-  type Item = Option<Arc<V>>;
+  type Item = OptionRef<'a, K, V>;
 
   fn next(&mut self) -> Option<Self::Item> {
     self
@@ -310,7 +443,10 @@ impl<'a, K, V> Iterator for AllVersions<'a, K, V> {
           self.current_version += 1;
         }
 
-        ent.value().clone()
+        OptionRef {
+          ent: self.entries.clone(),
+          version: ent_version,
+        }
       })
   }
 
@@ -324,7 +460,11 @@ impl<'a, K, V> Iterator for AllVersions<'a, K, V> {
       .lower_bound(Bound::Included(&self.max_version))
       .map(|ent| {
         self.current_version = *ent.key();
-        ent.value().clone()
+
+        OptionRef {
+          ent: self.entries.clone(),
+          version: self.current_version,
+        }
       })
   }
 }
@@ -332,12 +472,12 @@ impl<'a, K, V> Iterator for AllVersions<'a, K, V> {
 impl<'a, K, V> FusedIterator for AllVersions<'a, K, V> {}
 
 /// An iterator over a all values with the same key in different versions.
-pub struct AllVersionsWithPending<'a, K, V> {
-  pending: Option<OptionEntryRef<'a, K, V>>,
+pub struct WriteTransactionAllVersions<'a, K, V> {
+  pending: Option<OptionPendingRef<'a, K, V>>,
   committed: Option<AllVersions<'a, K, V>>,
 }
 
-impl<'a, K, V> Clone for AllVersionsWithPending<'a, K, V> {
+impl<'a, K, V> Clone for WriteTransactionAllVersions<'a, K, V> {
   fn clone(&self) -> Self {
     Self {
       pending: self.pending,
@@ -346,8 +486,8 @@ impl<'a, K, V> Clone for AllVersionsWithPending<'a, K, V> {
   }
 }
 
-impl<'a, K, V> Iterator for AllVersionsWithPending<'a, K, V> {
-  type Item = Either<OptionEntryRef<'a, K, V>, Option<Arc<V>>>;
+impl<'a, K, V> Iterator for WriteTransactionAllVersions<'a, K, V> {
+  type Item = Either<OptionPendingRef<'a, K, V>, OptionRef<'a, K, V>>;
 
   fn next(&mut self) -> Option<Self::Item> {
     if let Some(p) = self.pending.take() {
@@ -373,49 +513,11 @@ impl<'a, K, V> Iterator for AllVersionsWithPending<'a, K, V> {
   }
 }
 
-impl<'a, K, V> FusedIterator for AllVersionsWithPending<'a, K, V> {}
-
-/// Item reference yielded by the iterator.
-pub struct ItemRef<'a, K, V> {
-  version: u64,
-  ent: MapEntry<'a, K, SkipMap<u64, Option<Arc<V>>>>,
-}
-
-impl<'a, K, V> Clone for ItemRef<'a, K, V> {
-  fn clone(&self) -> Self {
-    Self {
-      version: self.version,
-      ent: self.ent.clone(),
-    }
-  }
-}
-
-impl<'a, K, V> ItemRef<'a, K, V> {
-  /// Get the key of the entry.
-  #[inline]
-  pub fn key(&self) -> &K {
-    self.ent.key()
-  }
-
-  /// Get the version of the entry.
-  #[inline]
-  pub const fn version(&self) -> u64 {
-    self.version
-  }
-
-  /// Get the value of the entry.
-  #[inline]
-  pub fn value(&self) -> Arc<V> {
-    // We already know that the value can't be None, when yielding the item.
-    let ent = self.ent.value().get(&self.version).unwrap();
-    // We already know that the value can't be None, when yielding the item.
-    ent.value().clone().unwrap()
-  }
-}
+impl<'a, K, V> FusedIterator for WriteTransactionAllVersions<'a, K, V> {}
 
 /// An iterator over the entries of the database.
 pub struct Iter<'a, K, V> {
-  iter: crossbeam_skiplist::map::Iter<'a, K, SkipMap<u64, Option<Arc<V>>>>,
+  iter: crossbeam_skiplist::map::Iter<'a, K, SkipMap<u64, Option<V>>>,
   version: u64,
 }
 
@@ -423,7 +525,7 @@ impl<'a, K, V> Iterator for Iter<'a, K, V>
 where
   K: Ord,
 {
-  type Item = ItemRef<'a, K, V>;
+  type Item = Ref<'a, K, V>;
 
   fn next(&mut self) -> Option<Self::Item> {
     loop {
@@ -439,7 +541,7 @@ where
           }
         })
       {
-        return Some(ItemRef { version, ent });
+        return Some(Ref { version, ent });
       }
     }
   }
@@ -463,7 +565,7 @@ where
           }
         })
       {
-        return Some(ItemRef { version, ent });
+        return Some(Ref { version, ent });
       }
     }
   }
@@ -474,8 +576,8 @@ pub struct WriteTransactionIter<'a, K, V, S> {
   pendings: BTreeMapIter<'a, K, EntryValue<V>>,
   committed: Iter<'a, K, V>,
   next_pending: Option<(&'a K, &'a EntryValue<V>)>,
-  next_committed: Option<ItemRef<'a, K, V>>,
-  last_yielded_key: Option<Either<&'a K, ItemRef<'a, K, V>>>,
+  next_committed: Option<Ref<'a, K, V>>,
+  last_yielded_key: Option<Either<&'a K, Ref<'a, K, V>>>,
   marker: Option<Marker<'a, HashCm<K, S>>>,
 }
 
@@ -521,7 +623,7 @@ where
   K: Ord + core::hash::Hash + Eq + 'static,
   S: BuildHasher + 'static,
 {
-  type Item = Either<(&'a K, &'a V), ItemRef<'a, K, V>>;
+  type Item = Either<(&'a K, &'a V), Ref<'a, K, V>>;
 
   fn next(&mut self) -> Option<Self::Item> {
     loop {
@@ -597,7 +699,7 @@ where
 
 /// An iterator over the entries of the database.
 pub struct AllVersionsIter<'a, K, V> {
-  iter: crossbeam_skiplist::map::Iter<'a, K, SkipMap<u64, Option<Arc<V>>>>,
+  iter: crossbeam_skiplist::map::Iter<'a, K, SkipMap<u64, Option<V>>>,
   version: u64,
 }
 
@@ -670,7 +772,7 @@ where
   R: RangeBounds<Q>,
   Q: Ord + ?Sized,
 {
-  range: MapRange<'a, Q, R, K, SkipMap<u64, Option<Arc<V>>>>,
+  range: MapRange<'a, Q, R, K, SkipMap<u64, Option<V>>>,
   version: u64,
 }
 
@@ -680,7 +782,7 @@ where
   R: RangeBounds<Q>,
   Q: Ord + ?Sized,
 {
-  type Item = ItemRef<'a, K, V>;
+  type Item = Ref<'a, K, V>;
 
   fn next(&mut self) -> Option<Self::Item> {
     loop {
@@ -696,7 +798,7 @@ where
           }
         })
       {
-        return Some(ItemRef { version, ent });
+        return Some(Ref { version, ent });
       }
     }
   }
@@ -722,7 +824,7 @@ where
           }
         })
       {
-        return Some(ItemRef { version, ent });
+        return Some(Ref { version, ent });
       }
     }
   }
@@ -735,7 +837,7 @@ where
   R: RangeBounds<Q>,
   Q: Ord + ?Sized,
 {
-  range: MapRange<'a, Q, R, K, SkipMap<u64, Option<Arc<V>>>>,
+  range: MapRange<'a, Q, R, K, SkipMap<u64, Option<V>>>,
   version: u64,
 }
 
