@@ -1,9 +1,6 @@
 use mwmr::error::WtmError;
 
-use self::{
-  iter::{WriteTransactionAllVersions, WriteTransactionAllVersionsIter, WriteTransactionIter},
-  range::{WriteTransactionAllVersionsRange, WriteTransactionRange},
-};
+use self::iter::{WriteTransactionAllVersions, WriteTransactionAllVersionsIter, WriteTransactionIter};
 
 use super::*;
 
@@ -289,7 +286,7 @@ where
     &'a mut self,
     range: R,
   ) -> Result<
-    WriteTransactionRange<'a, Q, R, K, V, S>,
+    WriteTransactionRange<'a, Q, R, K, V, HashCm<K, S>>,
     TransactionError<HashCm<K, S>, PendingMap<K, V>>,
   >
   where
@@ -313,7 +310,7 @@ where
     &'a mut self,
     range: R,
   ) -> Result<
-    WriteTransactionAllVersionsRange<'a, Q, R, K, V, S>,
+    WriteTransactionAllVersionsRange<'a, Q, R, K, V, HashCm<K, S>, EquivalentDB<K, V, S>>,
     TransactionError<HashCm<K, S>, PendingMap<K, V>>,
   >
   where

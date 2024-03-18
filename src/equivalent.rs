@@ -10,9 +10,6 @@ pub use write::*;
 /// Iterators
 pub mod iter;
 
-/// Subset iterators
-pub mod range;
-
 struct Inner<K, V, S = std::hash::DefaultHasher> {
   tm: Tm<K, V, HashCm<K, S>, PendingMap<K, V>>,
   map: InnerDB<K, V>,
@@ -84,7 +81,7 @@ impl<K, V, S> EquivalentDB<K, V, S> {
   #[inline]
   pub fn with_options_and_hasher(opts: Options, hasher: S) -> Self {
     let inner = Arc::new(Inner::new(
-      "skiplistdb",
+      core::any::type_name::<Self>(),
       opts.max_batch_size,
       opts.max_batch_entries,
       hasher,
