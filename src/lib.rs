@@ -12,7 +12,7 @@ use std::{
   hash::BuildHasher,
   iter::FusedIterator,
   ops::{Bound, RangeBounds},
-  sync::Arc
+  sync::Arc,
 };
 
 use crossbeam_skiplist::{
@@ -20,16 +20,13 @@ use crossbeam_skiplist::{
   SkipMap,
 };
 use either::Either;
-use mwmr::{
-  error::TransactionError, EntryValue, HashCm, Pwm, PwmComparable,
-  Rtm, Tm, Wtm,
-};
+use mwmr::{error::TransactionError, EntryValue, HashCm, Pwm, PwmComparable, Rtm, Tm, Wtm};
 
 /// `EquivalentDB` implementation, which requires `K` implements both [`Hash`](core::hash::Hash) and [`Ord`].
 /// If your `K` does not implement [`Hash`](core::hash::Hash), you can use [`ComparableDB`] instead.
 pub mod equivalent;
 
-/// `ComparableDB` implementation, which requires `K` implements [`Ord`]. If your `K` implements both [`Hash`](core::hash::Hash) and [`Ord`], you are recommended to use [`EquivalentDB`] instead.
+/// `ComparableDB` implementation, which requires `K` implements [`Ord`]. If your `K` implements both [`Hash`](core::hash::Hash) and [`Ord`], you are recommended to use [`EquivalentDB`](crate::equivalent::EquivalentDB) instead.
 pub mod comparable;
 
 /// The options used to create a new `EquivalentDB`.

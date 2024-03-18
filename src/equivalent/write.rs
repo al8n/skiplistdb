@@ -2,7 +2,7 @@ use mwmr::error::WtmError;
 
 use self::{
   iter::{WriteTransactionAllVersions, WriteTransactionAllVersionsIter, WriteTransactionIter},
-  range::WriteTransactionRange,
+  range::{WriteTransactionAllVersionsRange, WriteTransactionRange},
 };
 
 use super::*;
@@ -57,7 +57,9 @@ where
   /// run. If there are no conflicts, the callback will be called in the
   /// background upon successful completion of writes or any error during write.
   #[inline]
-  pub fn commit(&mut self) -> Result<(), WtmError<HashCm<K, S>, PendingMap<K, V>, core::convert::Infallible>> {
+  pub fn commit(
+    &mut self,
+  ) -> Result<(), WtmError<HashCm<K, S>, PendingMap<K, V>, core::convert::Infallible>> {
     self.wtm.commit(|ents| {
       self.db.apply(ents);
       Ok(())
@@ -87,18 +89,24 @@ where
   /// run. If there are no conflicts, the callback will be called in the
   /// background upon successful completion of writes or any error during write.
   #[inline]
-  pub fn commit_with_callback<F, E, R>(&mut self, callback: impl FnOnce(Result<(), E>) -> R + Send + 'static) -> Result<std::thread::JoinHandle<R>, WtmError<HashCm<K, S>, PendingMap<K, V>, E>>
+  pub fn commit_with_callback<F, E, R>(
+    &mut self,
+    callback: impl FnOnce(Result<(), E>) -> R + Send + 'static,
+  ) -> Result<std::thread::JoinHandle<R>, WtmError<HashCm<K, S>, PendingMap<K, V>, E>>
   where
     F: FnOnce(OneOrMore<Entry<K, V>>) -> Result<(), E> + Send + 'static,
     E: std::error::Error,
     R: Send + 'static,
   {
     let db = self.db.clone();
-    
-    self.wtm.commit_with_callback(move |ents| {
-      db.apply(ents);
-      Ok(())
-    }, callback)
+
+    self.wtm.commit_with_callback(
+      move |ents| {
+        db.apply(ents);
+        Ok(())
+      },
+      callback,
+    )
   }
 }
 
@@ -138,13 +146,15 @@ where
   {
     let db = self.db.clone();
 
-    self.wtm.commit_with_task::<_, _, _, AS>(move |ents| {
-      db.apply(ents);
-      Ok(())
-    }, fut)
+    self.wtm.commit_with_task::<_, _, _, AS>(
+      move |ents| {
+        db.apply(ents);
+        Ok(())
+      },
+      fut,
+    )
   }
 }
-
 
 impl<K, V, S> WriteTransaction<K, V, S>
 where
@@ -278,7 +288,10 @@ where
   pub fn range<'a, Q, R>(
     &'a mut self,
     range: R,
-  ) -> Result<WriteTransactionRange<'a, Q, R, K, V, S>, TransactionError<HashCm<K, S>, PendingMap<K, V>>>
+  ) -> Result<
+    WriteTransactionRange<'a, Q, R, K, V, S>,
+    TransactionError<HashCm<K, S>, PendingMap<K, V>>,
+  >
   where
     K: Borrow<Q>,
     R: RangeBounds<Q> + 'a,
@@ -293,5 +306,30 @@ where
 
     Ok(WriteTransactionRange::new(pendings, committed, marker))
   }
-}
 
+  /// Returns an iterator over the subset of entries (all versions, including removed one) of the database.
+  #[inline]
+  pub fn range_all_versions<'a, Q, R>(
+    &'a mut self,
+    range: R,
+  ) -> Result<
+    WriteTransactionAllVersionsRange<'a, Q, R, K, V, S>,
+    TransactionError<HashCm<K, S>, PendingMap<K, V>>,
+  >
+  where
+    K: Borrow<Q>,
+    R: RangeBounds<Q> + 'a,
+    Q: Ord + ?Sized,
+  {
+    let version = self.wtm.version();
+    let (marker, pm) = self.wtm.marker_with_pm()?;
+    let start = range.start_bound();
+    let end = range.end_bound();
+    let pendings = pm.map.range((start, end));
+    let committed = self.db.range_all_versions(range, version);
+
+    Ok(WriteTransactionAllVersionsRange::new(
+      &self.db, version, pendings, committed, marker,
+    ))
+  }
+}

@@ -321,7 +321,7 @@ where
   K: Ord,
   V: Send + 'static,
 {
-  fn apply(&self, entries: OneOrMore<mwmr::Entry<K, V>>,) {
+  fn apply(&self, entries: OneOrMore<mwmr::Entry<K, V>>) {
     for ent in entries {
       let version = ent.version();
       match ent.data {

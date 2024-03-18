@@ -342,7 +342,7 @@ where
   R: RangeBounds<Q> + 'a,
   Q: Ord + ?Sized,
   S: BuildHasher + 'static,
-{ 
+{
   db: &'a EquivalentDB<K, V, S>,
   pendings: BTreeMapRange<'a, K, EntryValue<V>>,
   committed: AllVersionsRange<'a, Q, R, K, V>,
@@ -396,29 +396,167 @@ where
   }
 }
 
-
 impl<'a, Q, R, K, V, S> Iterator for WriteTransactionAllVersionsRange<'a, Q, R, K, V, S>
 where
   K: core::hash::Hash + Eq + Ord + Borrow<Q> + 'static,
-  Q: Ord + ?Sized,
+  Q: Ord + ?Sized + 'a,
   R: RangeBounds<Q> + 'a,
   S: BuildHasher + 'static,
 {
   type Item = WriteTransactionAllVersions<'a, K, V>;
 
   fn next(&mut self) -> Option<Self::Item> {
-    todo!()
+    loop {
+      // Retrieve the current keys from pending and committed iterators
+      let next_pending_key = self.next_pending.map(|(k, _)| k);
+      let next_committed_key = self.next_committed.as_ref().map(|ref_| ref_.key());
+
+      match (next_pending_key, next_committed_key) {
+        // If both pending and committed have next items
+        (Some(pending_key), Some(committed_key)) if pending_key <= committed_key => {
+          // Pending key is smaller or equal, prefer pending
+          let (key, value) = self.next_pending.take().unwrap();
+          self.advance_pending();
+          if self
+            .last_yielded_key
+            .as_ref()
+            .map_or(true, |either| match either {
+              Either::Left(l) => l != &key,
+              Either::Right(r) => r.key() != key,
+            })
+          {
+            // Update last yielded key and return the item if it hasn't been yielded before
+            self.last_yielded_key = Some(Either::Left(key));
+            return Some(WriteTransactionAllVersions {
+              pending: Some(OptionPendingRef::new(mwmr::EntryRef {
+                data: match value.value {
+                  Some(ref value) => mwmr::EntryDataRef::Insert { key, value },
+                  None => mwmr::EntryDataRef::Remove(key),
+                },
+                version: value.version,
+              })),
+              committed: self.db.get_all_versions(key.borrow(), self.version),
+            });
+          }
+        }
+        // Handle the case where either only committed has items left or both have items and committed key is smaller
+        (None, Some(_)) | (Some(_), Some(_)) => {
+          let committed = self.next_committed.take().unwrap();
+          self.advance_committed();
+          if self
+            .last_yielded_key
+            .as_ref()
+            .map_or(true, |either| match either {
+              Either::Left(l) => *l != committed.key(),
+              Either::Right(r) => r.key() != committed.key(),
+            })
+          {
+            // Update last yielded key and return the item if it hasn't been yielded before
+            self.last_yielded_key = Some(Either::Right(committed.clone()));
+            return Some(WriteTransactionAllVersions {
+              pending: None,
+              committed: Some(committed),
+            });
+          }
+        }
+        // If only pending has items left
+        (Some(_), None) => {
+          let (key, value) = self.next_pending.take().unwrap();
+          self.advance_pending();
+          // Update last yielded key and return the item if it hasn't been yielded before
+          self.last_yielded_key = Some(Either::Left(key));
+
+          return Some(WriteTransactionAllVersions {
+            pending: Some(OptionPendingRef::new(mwmr::EntryRef {
+              data: match value.value {
+                Some(ref value) => mwmr::EntryDataRef::Insert { key, value },
+                None => mwmr::EntryDataRef::Remove(key),
+              },
+              version: value.version,
+            })),
+            committed: self.db.get_all_versions(key.borrow(), self.version),
+          });
+        }
+        // No items left in either iterator
+        (None, None) => return None,
+      }
+    }
   }
 }
 
 impl<'a, Q, R, K, V, S> DoubleEndedIterator for WriteTransactionAllVersionsRange<'a, Q, R, K, V, S>
 where
   K: core::hash::Hash + Eq + Ord + Borrow<Q> + 'static,
-  Q: Ord + ?Sized,
+  Q: Ord + ?Sized + 'a,
   R: RangeBounds<Q> + 'a,
   S: BuildHasher + 'static,
 {
   fn next_back(&mut self) -> Option<Self::Item> {
-    todo!()
+    loop {
+      // Retrieve the current keys from pending and committed iterators
+      let next_pending_key = self.next_pending.map(|(k, _)| k);
+      let next_committed_key = self.next_committed.as_ref().map(|ref_| ref_.key());
+
+      match (next_pending_key, next_committed_key) {
+        (Some(pending_key), Some(committed_key)) if pending_key >= committed_key => {
+          let (key, value) = self.next_pending.take().unwrap();
+          self.advance_pending();
+          if self
+            .last_yielded_key
+            .as_ref()
+            .map_or(true, |either| match either {
+              Either::Left(l) => *l != key,
+              Either::Right(r) => r.key() != key,
+            })
+          {
+            self.last_yielded_key = Some(Either::Left(key));
+            return Some(WriteTransactionAllVersions {
+              pending: Some(OptionPendingRef::new(mwmr::EntryRef {
+                data: match value.value {
+                  Some(ref value) => mwmr::EntryDataRef::Insert { key, value },
+                  None => mwmr::EntryDataRef::Remove(key),
+                },
+                version: value.version,
+              })),
+              committed: self.db.get_all_versions(key.borrow(), self.version),
+            });
+          }
+        }
+        (Some(_), Some(_)) | (None, Some(_)) => {
+          let committed = self.next_committed.take().unwrap();
+          self.advance_committed();
+          if self
+            .last_yielded_key
+            .as_ref()
+            .map_or(true, |either| match either {
+              Either::Left(l) => *l != committed.key(),
+              Either::Right(r) => r.key() != committed.key(),
+            })
+          {
+            self.last_yielded_key = Some(Either::Right(committed.clone()));
+            return Some(WriteTransactionAllVersions {
+              pending: None,
+              committed: Some(committed),
+            });
+          }
+        }
+        (Some(_), None) => {
+          let (key, value) = self.next_pending.take().unwrap();
+          self.advance_pending();
+          self.last_yielded_key = Some(Either::Left(key));
+          return Some(WriteTransactionAllVersions {
+            pending: Some(OptionPendingRef::new(mwmr::EntryRef {
+              data: match value.value {
+                Some(ref value) => mwmr::EntryDataRef::Insert { key, value },
+                None => mwmr::EntryDataRef::Remove(key),
+              },
+              version: value.version,
+            })),
+            committed: self.db.get_all_versions(key.borrow(), self.version),
+          });
+        }
+        (None, None) => return None,
+      }
+    }
   }
 }
