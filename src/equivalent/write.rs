@@ -1,3 +1,10 @@
+use mwmr::error::WtmError;
+
+use self::{
+  iter::{WriteTransactionAllVersions, WriteTransactionAllVersionsIter, WriteTransactionIter},
+  range::WriteTransactionRange,
+};
+
 use super::*;
 
 /// A read only transaction over the [`EquivalentDB`],
@@ -121,6 +128,15 @@ where
     self.wtm.remove(key)
   }
 
+  /// Commit the transaction.
+  #[inline]
+  pub fn commit(&mut self) -> Result<(), WtmError<HashCm<K, S>, PendingMap<K, V>, core::convert::Infallible>> {
+    self.wtm.commit(|ents| {
+      self.db.apply(ents);
+      Ok(())
+    })
+  }
+
   /// Iterate over the entries of the write transaction.
   #[inline]
   pub fn iter(
@@ -134,5 +150,45 @@ where
     let pendings = pm.map.iter();
 
     Ok(WriteTransactionIter::new(pendings, committed, marker))
+  }
+
+  /// Returns an iterator over the entries (all versions, including removed one) of the database.
+  #[inline]
+  pub fn iter_all_versions(
+    &mut self,
+  ) -> Result<
+    WriteTransactionAllVersionsIter<'_, K, V, S>,
+    TransactionError<HashCm<K, S>, PendingMap<K, V>>,
+  > {
+    let version = self.wtm.version();
+    let (marker, pm) = self.wtm.marker_with_pm()?;
+
+    let committed = self.db.iter_all_versions(version);
+    let pendings = pm.map.iter();
+
+    Ok(WriteTransactionAllVersionsIter::new(
+      &self.db, version, pendings, committed, marker,
+    ))
+  }
+
+  /// Returns an iterator over the subset of entries of the database.
+  #[inline]
+  pub fn range<'a, Q, R>(
+    &'a mut self,
+    range: R,
+  ) -> Result<WriteTransactionRange<'a, Q, R, K, V, S>, TransactionError<HashCm<K, S>, PendingMap<K, V>>>
+  where
+    K: Borrow<Q>,
+    R: RangeBounds<Q> + 'a,
+    Q: Ord + ?Sized,
+  {
+    let version = self.wtm.version();
+    let (marker, pm) = self.wtm.marker_with_pm()?;
+    let start = range.start_bound();
+    let end = range.end_bound();
+    let pendings = pm.map.range((start, end));
+    let committed = self.db.range(range, version);
+
+    Ok(WriteTransactionRange::new(pendings, committed, marker))
   }
 }
