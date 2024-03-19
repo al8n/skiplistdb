@@ -1,13 +1,12 @@
 [package]
-name = "template-rs"
-version = "0.1.6"
+name = "skiplistdb"
+version = "0.0.0"
 edition = "2021"
-repository = "https://github.com/al8n/template-rs"
-homepage = "https://github.com/al8n/template-rs"
-documentation = "https://docs.rs/template-rs"
-description = "A template for creating Rust open-source repo on GitHub"
+repository = "https://github.com/al8n/skiplistdb"
+homepage = "https://github.com/al8n/skiplistdb"
+documentation = "https://docs.rs/skiplistdb"
+description = "Blazing fast ACID, MVCC and SSI in memory database based on lock-free skiplist."
 license = "MIT/Apache-2.0"
-rust-version = "1.73"
 
 [[bench]]
 path = "benches/foo.rs"
@@ -16,8 +15,17 @@ harness = false
 
 [features]
 default = []
+future = ["mwmr/future"]
+
+smol = ["mwmr/smol", "future"]
+tokio = ["mwmr/tokio", "future"]
+async-std = ["mwmr/async-std", "future"]
 
 [dependencies]
+cheap-clone = "0.1"
+crossbeam-skiplist = "0.1"
+either = "1"
+mwmr = { git = "https://github.com/al8n/txn", branch = "main" }
 
 [dev-dependencies]
 criterion = "0.5"
