@@ -5,7 +5,7 @@ edition = "2021"
 repository = "https://github.com/al8n/skiplistdb"
 homepage = "https://github.com/al8n/skiplistdb"
 documentation = "https://docs.rs/skiplistdb"
-description = "A template for creating Rust open-source repo on GitHub"
+description = "Blazing fast ACID, MVCC and SSI in memory database based on lock-free skiplist."
 license = "MIT/Apache-2.0"
 
 [[bench]]
@@ -25,7 +25,7 @@ async-std = ["mwmr/async-std", "future"]
 cheap-clone = "0.1"
 crossbeam-skiplist = "0.1"
 either = "1"
-mwmr = { path = "../txn/mwmr" }
+mwmr = { git = "https://github.com/al8n/txn", branch = "main" }
 
 [dev-dependencies]
 criterion = "0.5"
