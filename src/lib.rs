@@ -1,9 +1,10 @@
-//! Blazing fast ACID and MVCC in memory database based on [`crossbeam-skiplist`](https://crates.io/crates/crossbeam-skiplist).
+//! Blazing fast ACID and MVCC in memory database.
 //!
 //! `skiplistdb` uses the same SSI (Serializable Snapshot Isolation) transaction model used in [`badger`](https://github.com/dgraph-io/badger).
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![cfg_attr(docsrs, allow(unused_attributes))]
 #![deny(missing_docs)]
+#![forbid(unsafe_code)]
 #![allow(clippy::type_complexity)]
 
 use std::{

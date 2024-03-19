@@ -1,26 +1,32 @@
-use mwmr::error::WtmError;
+use either::Either;
+use mwmr::{
+  error::{TransactionError, WtmError},
+  Entry, OneOrMore, Wtm,
+};
 
-use self::{
-  iter::{WriteTransactionAllVersions, WriteTransactionAllVersionsIter, WriteTransactionIter},
-  range::{WriteTransactionAllVersionsRange, WriteTransactionRange},
+use core::borrow::Borrow;
+use std::ops::RangeBounds;
+
+use crate::{
+  OptionPendingRef, PendingRef, Ref, WriteTransactionAllVersions, WriteTransactionAllVersionsIter,
+  WriteTransactionAllVersionsRange, WriteTransactionIter, WriteTransactionRange,
 };
 
 use super::*;
 
 /// A read only transaction over the [`EquivalentDB`],
-pub struct WriteTransaction<K, V, S> {
-  db: EquivalentDB<K, V, S>,
-  wtm: Wtm<K, V, HashCm<K, S>, PendingMap<K, V>>,
+pub struct WriteTransaction<K, V> {
+  db: ComparableDB<K, V>,
+  wtm: Wtm<K, V, BTreeCm<K>, PendingMap<K, V>>,
 }
 
-impl<K, V, S> WriteTransaction<K, V, S>
+impl<K, V> WriteTransaction<K, V>
 where
-  K: Ord + core::hash::Hash + Eq + 'static,
+  K: CheapClone + Ord + 'static,
   V: 'static,
-  S: BuildHasher + Clone + 'static,
 {
   #[inline]
-  pub(super) fn new(db: EquivalentDB<K, V, S>) -> Self {
+  pub(super) fn new(db: ComparableDB<K, V>) -> Self {
     let wtm = db
       .inner
       .tm
@@ -28,18 +34,17 @@ where
         Options::default()
           .with_max_batch_entries(db.inner.max_batch_entries)
           .with_max_batch_size(db.inner.max_batch_size),
-        Some(db.inner.hasher.clone()),
+        Some(()),
       )
       .unwrap();
     Self { db, wtm }
   }
 }
 
-impl<K, V, S> WriteTransaction<K, V, S>
+impl<K, V> WriteTransaction<K, V>
 where
-  K: Ord + core::hash::Hash + Eq + 'static,
+  K: CheapClone + Ord + 'static,
   V: Send + 'static,
-  S: BuildHasher + 'static,
 {
   /// Commits the transaction, following these steps:
   ///
@@ -59,19 +64,18 @@ where
   #[inline]
   pub fn commit(
     &mut self,
-  ) -> Result<(), WtmError<HashCm<K, S>, PendingMap<K, V>, core::convert::Infallible>> {
+  ) -> Result<(), WtmError<BTreeCm<K>, PendingMap<K, V>, core::convert::Infallible>> {
     self.wtm.commit(|ents| {
-      self.db.apply(ents);
+      self.db.inner.map.apply(ents);
       Ok(())
     })
   }
 }
 
-impl<K, V, S> WriteTransaction<K, V, S>
+impl<K, V> WriteTransaction<K, V>
 where
-  K: Ord + core::hash::Hash + Eq + Send + Sync + 'static,
+  K: CheapClone + Ord + Send + Sync + 'static,
   V: Send + Sync + 'static,
-  S: BuildHasher + Send + Sync + 'static,
 {
   /// Acts like [`commit`](WriteTransaction::commit), but takes a callback, which gets run via a
   /// thread to avoid blocking this function. Following these steps:
@@ -92,7 +96,7 @@ where
   pub fn commit_with_callback<F, E, R>(
     &mut self,
     callback: impl FnOnce(Result<(), E>) -> R + Send + 'static,
-  ) -> Result<std::thread::JoinHandle<R>, WtmError<HashCm<K, S>, PendingMap<K, V>, E>>
+  ) -> Result<std::thread::JoinHandle<R>, WtmError<BTreeCm<K>, PendingMap<K, V>, E>>
   where
     F: FnOnce(OneOrMore<Entry<K, V>>) -> Result<(), E> + Send + 'static,
     E: std::error::Error,
@@ -102,7 +106,7 @@ where
 
     self.wtm.commit_with_callback(
       move |ents| {
-        db.apply(ents);
+        db.inner.map.apply(ents);
         Ok(())
       },
       callback,
@@ -111,11 +115,10 @@ where
 }
 
 #[cfg(feature = "future")]
-impl<K, V, H> WriteTransaction<K, V, H>
+impl<K, V> WriteTransaction<K, V>
 where
-  K: Ord + core::hash::Hash + Eq + Send + Sync + 'static,
+  K: CheapClone + Ord + Send + Sync + 'static,
   V: Send + Sync + 'static,
-  H: BuildHasher + Send + Sync + 'static,
 {
   /// Acts like [`commit`](WriteTransaction::commit), but takes a future and a spawner, which gets run via a
   /// task to avoid blocking this function. Following these steps:
@@ -137,7 +140,7 @@ where
   pub fn commit_with_task<F, E, R, AS>(
     &mut self,
     fut: impl FnOnce(Result<(), E>) -> R + Send + 'static,
-  ) -> Result<<AS as mwmr::AsyncSpawner>::JoinHandle<R>, WtmError<HashCm<K, H>, PendingMap<K, V>, E>>
+  ) -> Result<<AS as mwmr::AsyncSpawner>::JoinHandle<R>, WtmError<BTreeCm<K>, PendingMap<K, V>, E>>
   where
     F: FnOnce(OneOrMore<Entry<K, V>>) -> Result<(), E> + Send + 'static,
     E: std::error::Error,
@@ -148,7 +151,7 @@ where
 
     self.wtm.commit_with_task::<_, _, _, AS>(
       move |ents| {
-        db.apply(ents);
+        db.inner.map.apply(ents);
         Ok(())
       },
       fut,
@@ -156,45 +159,36 @@ where
   }
 }
 
-impl<K, V, S> WriteTransaction<K, V, S>
+impl<K, V> WriteTransaction<K, V>
 where
-  K: Ord + core::hash::Hash + Eq + 'static,
+  K: CheapClone + Ord + 'static,
   V: 'static,
-  S: BuildHasher + 'static,
 {
   /// Returns true if the given key exists in the database.
   #[inline]
-  pub fn contains_key<Q>(
+  pub fn contains_key(
     &mut self,
-    key: &Q,
-  ) -> Result<bool, TransactionError<HashCm<K, S>, PendingMap<K, V>>>
-  where
-    K: Borrow<Q>,
-    Q: core::hash::Hash + Eq + Ord + ?Sized,
-  {
+    key: &K,
+  ) -> Result<bool, TransactionError<BTreeCm<K>, PendingMap<K, V>>> {
     let version = self.wtm.version();
-    match self.wtm.contains_key_equivalent_cm_comparable_pm(key)? {
+    match self.wtm.contains_key(key)? {
       Some(true) => Ok(true),
       Some(false) => Ok(false),
-      None => Ok(self.db.contains_key(key, version)),
+      None => Ok(self.db.inner.map.contains_key(key, version)),
     }
   }
 
   /// Get a value from the database.
   #[inline]
-  pub fn get<'a, 'b: 'a, Q>(
+  pub fn get<'a, 'b: 'a>(
     &'a mut self,
-    key: &'b Q,
+    key: &'b K,
   ) -> Result<
     Option<Either<PendingRef<'a, K, V>, Ref<'a, K, V>>>,
-    TransactionError<HashCm<K, S>, PendingMap<K, V>>,
-  >
-  where
-    K: Borrow<Q>,
-    Q: core::hash::Hash + Eq + Ord + ?Sized,
-  {
+    TransactionError<BTreeCm<K>, PendingMap<K, V>>,
+  > {
     let version = self.wtm.version();
-    match self.wtm.get_equivalent_cm_comparable_pm(key)? {
+    match self.wtm.get(key)? {
       Some(v) => {
         if v.value().is_some() {
           Ok(Some(Either::Left(PendingRef::new(v))))
@@ -202,30 +196,26 @@ where
           Ok(None)
         }
       }
-      None => Ok(self.db.get(key, version).map(Either::Right)),
+      None => Ok(self.db.inner.map.get(key, version).map(Either::Right)),
     }
   }
 
   /// Get all the values in different versions for the given key. Including the removed ones.
   #[inline]
-  pub fn get_all_versions<'a, 'b: 'a, Q>(
+  pub fn get_all_versions<'a, 'b: 'a>(
     &'a mut self,
-    key: &'b Q,
+    key: &'b K,
   ) -> Result<
     Option<WriteTransactionAllVersions<'a, K, V>>,
-    TransactionError<HashCm<K, S>, PendingMap<K, V>>,
-  >
-  where
-    K: Borrow<Q>,
-    Q: core::hash::Hash + Ord + ?Sized,
-  {
+    TransactionError<BTreeCm<K>, PendingMap<K, V>>,
+  > {
     let version = self.wtm.version();
     let mut pending = None;
-    if let Some(ent) = self.wtm.get_equivalent_cm_comparable_pm(key)? {
+    if let Some(ent) = self.wtm.get(key)? {
       pending = Some(OptionPendingRef::new(ent));
     }
 
-    let committed = self.db.get_all_versions(key, version);
+    let committed = self.db.inner.map.get_all_versions(key, version);
 
     if committed.is_none() && pending.is_none() {
       return Ok(None);
@@ -239,13 +229,13 @@ where
     &mut self,
     key: K,
     value: V,
-  ) -> Result<(), TransactionError<HashCm<K, S>, PendingMap<K, V>>> {
+  ) -> Result<(), TransactionError<BTreeCm<K>, PendingMap<K, V>>> {
     self.wtm.insert(key, value)
   }
 
   /// Remove a key.
   #[inline]
-  pub fn remove(&mut self, key: K) -> Result<(), TransactionError<HashCm<K, S>, PendingMap<K, V>>> {
+  pub fn remove(&mut self, key: K) -> Result<(), TransactionError<BTreeCm<K>, PendingMap<K, V>>> {
     self.wtm.remove(key)
   }
 
@@ -253,12 +243,14 @@ where
   #[inline]
   pub fn iter(
     &mut self,
-  ) -> Result<WriteTransactionIter<'_, K, V, S>, TransactionError<HashCm<K, S>, PendingMap<K, V>>>
-  {
+  ) -> Result<
+    WriteTransactionIter<'_, K, V, BTreeCm<K>>,
+    TransactionError<BTreeCm<K>, PendingMap<K, V>>,
+  > {
     let version = self.wtm.version();
     let (marker, pm) = self.wtm.marker_with_pm()?;
 
-    let committed = self.db.iter(version);
+    let committed = self.db.inner.map.iter(version);
     let pendings = pm.map.iter();
 
     Ok(WriteTransactionIter::new(pendings, committed, marker))
@@ -269,13 +261,13 @@ where
   pub fn iter_all_versions(
     &mut self,
   ) -> Result<
-    WriteTransactionAllVersionsIter<'_, K, V, S>,
-    TransactionError<HashCm<K, S>, PendingMap<K, V>>,
+    WriteTransactionAllVersionsIter<'_, K, V, BTreeCm<K>, ComparableDB<K, V>>,
+    TransactionError<BTreeCm<K>, PendingMap<K, V>>,
   > {
     let version = self.wtm.version();
     let (marker, pm) = self.wtm.marker_with_pm()?;
 
-    let committed = self.db.iter_all_versions(version);
+    let committed = self.db.inner.map.iter_all_versions(version);
     let pendings = pm.map.iter();
 
     Ok(WriteTransactionAllVersionsIter::new(
@@ -289,8 +281,8 @@ where
     &'a mut self,
     range: R,
   ) -> Result<
-    WriteTransactionRange<'a, Q, R, K, V, S>,
-    TransactionError<HashCm<K, S>, PendingMap<K, V>>,
+    WriteTransactionRange<'a, Q, R, K, V, BTreeCm<K>>,
+    TransactionError<BTreeCm<K>, PendingMap<K, V>>,
   >
   where
     K: Borrow<Q>,
@@ -302,7 +294,7 @@ where
     let start = range.start_bound();
     let end = range.end_bound();
     let pendings = pm.map.range((start, end));
-    let committed = self.db.range(range, version);
+    let committed = self.db.inner.map.range(range, version);
 
     Ok(WriteTransactionRange::new(pendings, committed, marker))
   }
@@ -313,8 +305,8 @@ where
     &'a mut self,
     range: R,
   ) -> Result<
-    WriteTransactionAllVersionsRange<'a, Q, R, K, V, S>,
-    TransactionError<HashCm<K, S>, PendingMap<K, V>>,
+    WriteTransactionAllVersionsRange<'a, Q, R, K, V, BTreeCm<K>, ComparableDB<K, V>>,
+    TransactionError<BTreeCm<K>, PendingMap<K, V>>,
   >
   where
     K: Borrow<Q>,
@@ -326,7 +318,7 @@ where
     let start = range.start_bound();
     let end = range.end_bound();
     let pendings = pm.map.range((start, end));
-    let committed = self.db.range_all_versions(range, version);
+    let committed = self.db.inner.map.range_all_versions(range, version);
 
     Ok(WriteTransactionAllVersionsRange::new(
       &self.db, version, pendings, committed, marker,

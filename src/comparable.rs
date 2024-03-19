@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
+pub use cheap_clone::CheapClone;
 use crossbeam_skiplist::SkipMap;
 use mwmr::{BTreeCm, Tm};
 
-use super::{Options, PendingMap, InnerDB, ReadTransaction};
+use super::{InnerDB, Options, PendingMap, ReadTransaction};
+
+mod write;
+pub use write::*;
 
 struct Inner<K, V> {
   tm: Tm<K, V, BTreeCm<K>, PendingMap<K, V>>,
@@ -26,6 +30,13 @@ impl<K, V> Inner<K, V> {
 }
 
 /// A concurrent ACID, MVCC in-memory database based on [`crossbeam-skiplist`][crossbeam_skiplist].
+///
+/// `ComparableDB` requires key to be [`Ord`] and [`CheapClone`].
+/// The [`CheapClone`] bound here hints the user that the key should be cheap to clone,
+/// because it will be cloned at least one time during the write transaction.
+///
+/// Comparing to [`EquivalentDB`](crate::equivalent::EquivalentDB), `ComparableDB` does not require key to implement [`Hash`](core::hash::Hash).
+/// But, [`EquivalentDB`](crate::equivalent::EquivalentDB) has more flexible write transaction APIs.
 pub struct ComparableDB<K, V> {
   inner: Arc<Inner<K, V>>,
 }
@@ -80,5 +91,17 @@ impl<K, V> ComparableDB<K, V> {
   #[inline]
   pub fn read(&self) -> ReadTransaction<K, V, ComparableDB<K, V>, BTreeCm<K>> {
     ReadTransaction::new(self.clone(), self.inner.tm.read())
+  }
+}
+
+impl<K, V> ComparableDB<K, V>
+where
+  K: CheapClone + Ord + 'static,
+  V: 'static,
+{
+  /// Create a write transaction.
+  #[inline]
+  pub fn write(&self) -> WriteTransaction<K, V> {
+    WriteTransaction::new(self.clone())
   }
 }

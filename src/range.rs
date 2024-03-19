@@ -1,4 +1,4 @@
-use mwmr::{Marker, Cm};
+use mwmr::{Cm, Marker};
 
 use super::*;
 
@@ -145,7 +145,6 @@ where
     }
   }
 }
-
 
 /// An iterator over a subset of entries of the database.
 pub struct WriteTransactionRange<'a, Q, R, K, V, C>
@@ -357,7 +356,7 @@ where
   K: Ord + Borrow<Q> + 'static,
   Q: Ord + ?Sized,
   R: RangeBounds<Q> + 'a,
-  C: Cm<Key = K>
+  C: Cm<Key = K>,
 {
   fn advance_pending(&mut self) {
     self.next_pending = self.pendings.next();
@@ -490,7 +489,8 @@ where
   }
 }
 
-impl<'a, Q, R, K, V, C, D> DoubleEndedIterator for WriteTransactionAllVersionsRange<'a, Q, R, K, V, C, D>
+impl<'a, Q, R, K, V, C, D> DoubleEndedIterator
+  for WriteTransactionAllVersionsRange<'a, Q, R, K, V, C, D>
 where
   K: core::hash::Hash + Eq + Ord + Borrow<Q> + 'static,
   Q: Ord + ?Sized + 'a,

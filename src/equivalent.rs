@@ -1,14 +1,9 @@
 use super::*;
 
-use std::{cmp, collections::btree_map::Iter as BTreeMapIter};
-
-use mwmr::{Marker, OneOrMore};
+use mwmr::OneOrMore;
 
 mod write;
 pub use write::*;
-
-/// Iterators
-pub mod iter;
 
 struct Inner<K, V, S = std::hash::DefaultHasher> {
   tm: Tm<K, V, HashCm<K, S>, PendingMap<K, V>>,
@@ -33,6 +28,12 @@ impl<K, V, S> Inner<K, V, S> {
 }
 
 /// A concurrent ACID, MVCC in-memory database based on [`crossbeam-skiplist`][crossbeam_skiplist].
+///
+/// `EquivalentDB` requires key to be [`Ord`] and [`Hash`](core::hash::Hash).
+///
+/// Comparing to [`ComparableDB`](crate::comparable::ComparableDB),
+/// `EquivalentDB` has more flexible write transaction APIs and no clone happen.
+/// But, [`ComparableDB`](crate::comparable::ComparableDB) does not require the key to implement [`Hash`](core::hash::Hash).
 pub struct EquivalentDB<K, V, S = std::hash::DefaultHasher> {
   inner: Arc<Inner<K, V, S>>,
 }

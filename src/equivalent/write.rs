@@ -1,7 +1,5 @@
 use mwmr::error::WtmError;
 
-use self::iter::{WriteTransactionAllVersions, WriteTransactionAllVersionsIter, WriteTransactionIter};
-
 use super::*;
 
 /// A read only transaction over the [`EquivalentDB`],
@@ -250,8 +248,10 @@ where
   #[inline]
   pub fn iter(
     &mut self,
-  ) -> Result<WriteTransactionIter<'_, K, V, S>, TransactionError<HashCm<K, S>, PendingMap<K, V>>>
-  {
+  ) -> Result<
+    WriteTransactionIter<'_, K, V, HashCm<K, S>>,
+    TransactionError<HashCm<K, S>, PendingMap<K, V>>,
+  > {
     let version = self.wtm.version();
     let (marker, pm) = self.wtm.marker_with_pm()?;
 
@@ -266,7 +266,7 @@ where
   pub fn iter_all_versions(
     &mut self,
   ) -> Result<
-    WriteTransactionAllVersionsIter<'_, K, V, S>,
+    WriteTransactionAllVersionsIter<'_, K, V, HashCm<K, S>, EquivalentDB<K, V, S>>,
     TransactionError<HashCm<K, S>, PendingMap<K, V>>,
   > {
     let version = self.wtm.version();
